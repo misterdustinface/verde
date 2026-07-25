@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-verde build.py / import — primary feature
+verde build.py — primary feature (CLI: verde-import)
 
 Rebuilds a .rbxlx place from an extracted folder tree produced by extract.py
 (full rebuild), or applies changes from the extracted tree into an existing
 .rbxlx (differential import).
 
-verde-import (alias: verde-merge) is the preferred command:
+verde-import is the command:
 
-- If the target .rbxlx does not exist → full rebuild (previous verde-build behaviour)
+- If the target .rbxlx does not exist → full rebuild
 - If the target .rbxlx exists → scan the verde folder, match instances (by Referent
   preferentially, then by hierarchy path), and apply Source / Properties / Tags /
-  Attributes from the folder into the live place file. Unmatched instances in the
+  Attributes from the folder into the place file. Unmatched instances in the
   .rbxlx are left untouched. This enables iterative version-control workflows on
   an existing place without losing non-script content when using scripts-only
   extracts.
@@ -22,6 +22,9 @@ the .rbxlx). After a successful import the manifest is refreshed.
 
 Understands the full structured Properties map (all types) plus Tags and
 Attributes so that round-trips are as lossless as possible.
+
+For offline dirty push/pull against a .rbxlx without opening Studio, use
+verde-merge. For live Studio updates, use verde-sync.
 """
 
 from __future__ import annotations
@@ -45,7 +48,6 @@ def read_text(path: Path) -> str:
 
 
 def load_meta(path: Path) -> dict[str, Any]:
-    """Load .robloxmeta.json or fall back to legacy .robloxmeta text."""
     json_path = path / ".robloxmeta.json"
     if json_path.is_file():
         try:
@@ -74,7 +76,6 @@ def script_meta_for(script_file: Path) -> dict[str, Any]:
 
 
 def _emit_structured_children(parent_el: ET.Element, children: dict[str, Any]) -> None:
-    """Emit children dict (values may be scalar, dict, or list-of for repeated tags)."""
     for child_name, child_val in children.items():
         items = child_val if isinstance(child_val, list) else [child_val]
         for val in items:
@@ -86,7 +87,6 @@ def _emit_structured_children(parent_el: ET.Element, children: dict[str, Any]) -
                         child_el.set(ak, str(av))
                 remaining = {k: v for k, v in val.items() if k != "_attrs"}
                 if remaining:
-                    # If only a scalar-like _value leftover, treat as text
                     if set(remaining.keys()) == {"_value"}:
                         child_el.text = str(remaining["_value"]) if remaining["_value"] is not None else ""
                     else:
@@ -97,7 +97,6 @@ def _emit_structured_children(parent_el: ET.Element, children: dict[str, Any]) -
 
 
 def _emit_property(props_elem: ET.Element, name: str, structured: dict[str, Any]) -> None:
-    """Recreate a typed property element from the structured form produced by extract."""
     tag = structured.get("type", "string")
     el = ET.SubElement(props_elem, tag)
     el.set("name", name)
@@ -114,7 +113,6 @@ def add_properties(
     meta: dict[str, Any],
     source: str | None = None,
 ) -> None:
-    """Emit a <Properties> block from meta + optional Source."""
     props = ET.SubElement(item_elem, "Properties")
 
     if source is not None:
@@ -128,10 +126,6 @@ def add_properties(
         tags = [tags] if tags else []
 
     for prop_name, structured in full.items():
-        # Source / AttributesSerialize are always handled from top-level meta.
-        # Tags is only suppressed from full when we will emit a BinaryString/string
-        # from the decoded tags list; otherwise leave the original structured
-        # form (e.g. SharedString hash) so it is not silently dropped.
         if prop_name == "Source":
             continue
         if prop_name == "AttributesSerialize":
@@ -206,7 +200,6 @@ def process_directory(dir_path: Path, parent_element: ET.Element) -> None:
 
             meta = script_meta_for(item)
             class_name = meta.get("ClassName", class_name)
-            # XML Name comes from meta (original); filesystem base is used for children dir
             xml_name = meta.get("Name", fs_base)
 
             item_elem = ET.SubElement(parent_element, "Item")
@@ -218,7 +211,6 @@ def process_directory(dir_path: Path, parent_element: ET.Element) -> None:
             source = read_text(item)
             add_properties(item_elem, meta, source=source)
 
-            # Support children nested under scripts (sibling dir matching the uniquified fs base)
             children_dir = item.parent / fs_base
             if children_dir.is_dir() and children_dir != dir_path:
                 process_directory(children_dir, item_elem)
@@ -227,8 +219,6 @@ def process_directory(dir_path: Path, parent_element: ET.Element) -> None:
         if not item.is_dir():
             continue
 
-        # Skip directories that are children companions of a script file
-        # (they are processed when the matching .lua / .local.lua / .module.lua is seen)
         base = item.name
         if (
             (item.parent / f"{base}.lua").is_file()
@@ -252,7 +242,6 @@ def process_directory(dir_path: Path, parent_element: ET.Element) -> None:
 
 
 def build_rbxlx(input_dir: str, output_rbxlx: str = "RebuiltPlace.rbxlx") -> None:
-    """Full rebuild from extracted folder (used when target .rbxlx does not exist)."""
     input_path = Path(input_dir)
     if not input_path.is_dir():
         print(f"Error: Directory not found: {input_dir}")
@@ -276,7 +265,6 @@ def build_rbxlx(input_dir: str, output_rbxlx: str = "RebuiltPlace.rbxlx") -> Non
 
 
 def _resolve_item_name(item: ET.Element) -> str:
-    """Best-effort Name from attribute or Properties (mirrors extract)."""
     attr = item.get("name")
     if attr:
         return attr
@@ -299,16 +287,9 @@ def _sanitize_name(name: str) -> str:
 def _build_instance_maps(
     root: ET.Element,
 ) -> tuple[dict[str, ET.Element], dict[str, ET.Element]]:
-    """Build referent → Item and hierarchy-path → Item maps.
-
-    Path keys use the same sanitised + collision-suffix scheme as extract
-    (full hierarchy, document order). Prefer matching by Referent when available.
-    """
     referent_map: dict[str, ET.Element] = {}
     path_map: dict[str, ET.Element] = {}
-
-    # Per-parent taken names for collision suffixes (case-sensitive exact)
-    taken: dict[int, set[str]] = {}  # id(parent) -> set of fs names already used
+    taken: dict[int, set[str]] = {}
 
     def walk(item: ET.Element, parent: ET.Element | None, current_path: str) -> None:
         if item.tag != "Item":
@@ -351,7 +332,6 @@ def _clear_properties(item: ET.Element) -> None:
 
 
 def _get_source(item: ET.Element) -> str:
-    """Current Source text from Properties (empty string if absent)."""
     props = item.find("Properties")
     if props is None:
         return ""
@@ -362,7 +342,6 @@ def _get_source(item: ET.Element) -> str:
 
 
 def _get_tags(item: ET.Element) -> list[str]:
-    """Decode current Tags (BinaryString or string) into a list."""
     props = item.find("Properties")
     if props is None:
         return []
@@ -382,7 +361,6 @@ def _get_tags(item: ET.Element) -> list[str]:
 
 
 def _get_attributes(item: ET.Element) -> dict[str, Any]:
-    """Decode current AttributesSerialize into a dict."""
     props = item.find("Properties")
     if props is None:
         return {}
@@ -393,11 +371,6 @@ def _get_attributes(item: ET.Element) -> dict[str, Any]:
 
 
 def _parse_children(elem: ET.Element) -> dict[str, Any]:
-    """Parse child elements, preserving order and multiples of the same tag as lists.
-
-    Mirrors extract._parse_children so structured comparison matches the form
-    stored in .robloxmeta.json.
-    """
     children: dict[str, Any] = {}
     for child in elem:
         if len(child) == 0 and not child.attrib:
@@ -422,10 +395,6 @@ def _parse_children(elem: ET.Element) -> dict[str, Any]:
 
 
 def _parse_property_element(prop: ET.Element) -> dict[str, Any]:
-    """Convert a single <Type name=\"...\">...</Type> element into a structured dict.
-
-    Mirrors extract._parse_property_element.
-    """
     tag = prop.tag
     result: dict[str, Any] = {"type": tag}
 
@@ -458,7 +427,6 @@ def _parse_property_element(prop: ET.Element) -> dict[str, Any]:
 
 
 def _current_structured_props(item: ET.Element) -> dict[str, Any]:
-    """Parse non-special Properties into the structured form used in meta."""
     full: dict[str, Any] = {}
     props_elem = item.find("Properties")
     if props_elem is None:
@@ -476,14 +444,6 @@ def _needs_update(
     meta: dict[str, Any],
     source: str | None,
 ) -> bool:
-    """Return True if Source or any key field differs from the incoming meta.
-
-    Key fields: ClassName, Name, Referent, Tags, Attributes, and the structured
-    Properties map (plus any top-level scalar flat keys that add_properties would
-    emit). When nothing differs we skip the apply so the original XML order and
-    formatting of unchanged instances is preserved, and the final write can be
-    avoided entirely.
-    """
     if "ClassName" in meta and str(meta["ClassName"]) != (item.get("class") or ""):
         return True
     if "Name" in meta and str(meta["Name"]) != _resolve_item_name(item):
@@ -511,7 +471,6 @@ def _needs_update(
     if meta_props != current_props:
         return True
 
-    # Top-level scalar flats that add_properties would also emit
     special = {"ClassName", "Name", "Tags", "Attributes", "Properties", "Referent"}
     already = set(meta_props.keys()) | {"Source", "Tags", "AttributesSerialize"}
     for key, val in meta.items():
@@ -536,7 +495,6 @@ def _apply_meta_to_item(
     meta: dict[str, Any],
     source: str | None = None,
 ) -> None:
-    """Replace Properties (and class/name/referent attrs) from a verde meta + optional Source."""
     if "ClassName" in meta:
         item.set("class", str(meta["ClassName"]))
     if "Name" in meta:
@@ -549,20 +507,6 @@ def _apply_meta_to_item(
 
 
 def import_rbxlx(extracted_dir: str, output_rbxlx: str) -> None:
-    """Apply changes from an extracted Verde tree into an existing .rbxlx.
-
-    Matching order for each meta/script:
-    1. Referent (stable across renames / hierarchy moves when present)
-    2. Hierarchy path (sanitised Name path with the same collision rules as extract)
-
-    Instances present only in the .rbxlx are left untouched. New instances that
-    appear only in the folder are reported but not yet auto-inserted (safe default).
-
-    When .verde/manifest.json is present, files whose simple numeric hash + mtime
-    still match are skipped early; the mtime-wins rule is applied against the
-    .rbxlx so a more recent Roblox-side change is not overwritten by an older
-    Verde file.
-    """
     input_path = Path(extracted_dir)
     if not input_path.is_dir():
         print(f"Error: Directory not found: {extracted_dir}")
@@ -570,13 +514,11 @@ def import_rbxlx(extracted_dir: str, output_rbxlx: str) -> None:
 
     out_path = Path(output_rbxlx)
     if not out_path.is_file():
-        # Fallback: full rebuild (previous verde-build behaviour)
         build_rbxlx(extracted_dir, output_rbxlx)
         return
 
     print(f"Importing changes from {extracted_dir} → existing {output_rbxlx}")
 
-    # Touched-file tracking (optional fast path + mtime-win)
     manifest = None
     rbxlx_mtime = None
     try:
@@ -609,14 +551,11 @@ def import_rbxlx(extracted_dir: str, output_rbxlx: str) -> None:
         related_rels: list[str] = [rel_str]
 
         if meta_path.name == ".robloxmeta.json":
-            # Folder meta → path is the parent directory
             path_key = str(rel.parent).replace("\\", "/")
             if path_key in (".", ""):
-                path_key = ""  # rare top-level
+                path_key = ""
         else:
-            # Companion meta for a script: Foo.robloxmeta.json or Foo.local.robloxmeta.json
             base_for_script = meta_path.name[: -len(".robloxmeta.json")]
-            # Locate the matching script file
             script_file = None
             for cand in meta_path.parent.iterdir():
                 if not cand.is_file():
@@ -637,8 +576,6 @@ def import_rbxlx(extracted_dir: str, output_rbxlx: str) -> None:
                     pass
             path_key = str((rel.parent / base_for_script)).replace("\\", "/")
 
-        # Fast path: if none of the related files are dirty under the mtime-win
-        # rule, skip without even looking up the instance.
         if manifest is not None and is_file_dirty is not None:
             any_dirty = False
             for r in related_rels:
@@ -649,7 +586,6 @@ def import_rbxlx(extracted_dir: str, output_rbxlx: str) -> None:
                 skipped_clean += 1
                 continue
 
-        # Prefer Referent, fall back to path
         item: ET.Element | None = None
         ref = meta.get("Referent")
         if isinstance(ref, str) and ref in referent_map:
@@ -657,7 +593,6 @@ def import_rbxlx(extracted_dir: str, output_rbxlx: str) -> None:
         elif path_key is not None and path_key in path_map:
             item = path_map[path_key]
         elif path_key == "":
-            # could try top-level, but skip for safety
             pass
 
         if item is None:
@@ -665,7 +600,6 @@ def import_rbxlx(extracted_dir: str, output_rbxlx: str) -> None:
             skipped_no_match += 1
             continue
 
-        # Diff Source + key fields; only apply (and count as updated) when changed.
         if not _needs_update(item, meta, source):
             unchanged += 1
             continue
@@ -688,7 +622,7 @@ def import_rbxlx(extracted_dir: str, output_rbxlx: str) -> None:
         print(f"  ({skipped_no_match} folder entries had no matching instance in the place)")
     print("Open the place in Studio (or re-open) to see the changes.")
 
-    # Refresh the touched-file manifest so the next sync starts from a clean baseline.
+    # Refresh manifest so the next verde-merge starts from a clean baseline.
     try:
         from features.sync import write_manifest
 
@@ -702,7 +636,7 @@ def main() -> None:
         description=(
             "Import changes from a Verde extracted folder into an existing .rbxlx "
             "(or create the .rbxlx if it does not exist — full rebuild). "
-            "Aliases: verde-import, verde-merge."
+            "CLI: verde-import."
         )
     )
     parser.add_argument("extracted_dir", help="Path to extracted Verde folder")

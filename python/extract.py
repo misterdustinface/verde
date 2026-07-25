@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-verde extract.py — primary feature (CLI: verde-export / verde-extract)
+verde extract.py — primary feature (CLI: verde-export)
 
 Exports a Roblox .rbxlx place into a folder hierarchy that is easy to version-control,
 search, and edit.
@@ -19,7 +19,7 @@ search, and edit.
   - Paths that already exist on disk from a previous export are *reused* (no new
     digit suffix). Content is compared: identical files are left untouched;
     differing files are overwritten by default, or prompted with --interactive.
-- After a successful export a .verde/manifest.json is written so later sync/import
+- After a successful export a .verde/manifest.json is written so later merge/import
   can skip unchanged files (simple adler32 hash + mtime).
 """
 
@@ -40,9 +40,6 @@ from interesting import load_interesting_props
 
 SCRIPT_EXTS = (".lua", ".local.lua", ".module.lua")
 
-# macOS and Windows ship case-insensitive (or case-preserving) filesystems by
-# default. Treating the uniqueness set as case-sensitive on those platforms
-# lets a second sibling that differs only by case overwrite the first on disk.
 _FS_CASE_INSENSITIVE = platform.system() in ("Darwin", "Windows")
 
 
@@ -63,7 +60,6 @@ def get_script_extension(class_name: str) -> str:
 
 
 def _parse_children(elem: ET.Element) -> dict[str, Any]:
-    """Parse child elements, preserving order and multiples of the same tag as lists."""
     children: dict[str, Any] = {}
     for child in elem:
         if len(child) == 0 and not child.attrib:
@@ -88,7 +84,6 @@ def _parse_children(elem: ET.Element) -> dict[str, Any]:
 
 
 def _parse_property_element(prop: ET.Element) -> dict[str, Any]:
-    """Convert a single <Type name=\"...\">...</Type> element into a structured dict."""
     tag = prop.tag
     result: dict[str, Any] = {"type": tag}
 
@@ -123,14 +118,6 @@ def _parse_property_element(prop: ET.Element) -> dict[str, Any]:
 def extract_properties(
     item: ET.Element, interesting: set[str]
 ) -> tuple[dict[str, Any], list[str], dict[str, Any], dict[str, Any]]:
-    """Parse all Properties of an Item.
-
-    Returns:
-      flat: interesting string-like values for search/replace convenience
-      tags: decoded CollectionService tags (list)
-      full: complete structured property map for lossless rebuild
-      attributes: decoded Instance Attributes map
-    """
     flat: dict[str, Any] = {}
     tags: list[str] = []
     full: dict[str, Any] = {}
@@ -166,10 +153,9 @@ def extract_properties(
 
         if prop_name == "AttributesSerialize" and structured.get("type") == "BinaryString":
             decoded = decode_attributes(structured.get("value") or "")
-            if decoded:  # only promote when we actually got attributes
+            if decoded:
                 attributes = decoded
                 full.pop("AttributesSerialize", None)
-            # else: leave the raw BinaryString in full so a rebuild re-emits it
             continue
 
         if prop_name in interesting and structured.get("type") in (
@@ -192,13 +178,6 @@ def _resolve_name(
     flat: dict[str, Any],
     full_props: dict[str, Any],
 ) -> str:
-    """Resolve the Instance Name for filesystem paths and meta.
-
-    Real Roblox Studio .rbxlx files encode Name only as a property
-    (<string name=\"Name\">...</string>). The Item@name attribute is absent.
-    Some tools (including Verde build) also emit Item@name; prefer the
-    property when present, then the attribute, then \"Unnamed\".
-    """
     if "Name" in flat and isinstance(flat["Name"], str) and flat["Name"]:
         return flat["Name"]
 
@@ -216,16 +195,7 @@ def _resolve_name(
 
 
 def _compute_keep_map(items: list[ET.Element]) -> dict[int, bool]:
-    """Bottom-up: mark every Item that is a script or has a script descendant.
-
-    Used by the default (scripts-only) path so we never mkdir a directory that
-    would later be empty. id(item) is stable for the lifetime of the ElementTree.
-
-    Iterative post-order walk (explicit stack) so deep places cannot hit the
-    Python recursion limit.
-    """
     keep: dict[int, bool] = {}
-    # (item, children_done)
     stack: list[tuple[ET.Element, bool]] = []
     for it in items:
         stack.append((it, False))
@@ -236,7 +206,6 @@ def _compute_keep_map(items: list[ET.Element]) -> dict[int, bool]:
             continue
 
         if not children_done:
-            # Re-push as "children done", then push children so they run first.
             stack.append((item, True))
             for child in reversed(list(item)):
                 if child.tag == "Item":
@@ -254,14 +223,7 @@ def _compute_keep_map(items: list[ET.Element]) -> dict[int, bool]:
 
 
 def _prune_empty_dirs(root: Path) -> int:
-    """Remove directories that contain nothing (no files, no subdirs).
-
-    Post-order iterative walk. The root itself is never removed.
-    Returns number of dirs removed. Guarantees the invariant "only maintain a
-    folder if it has children" in every mode.
-    """
     removed = 0
-    # (path, children_visited)
     stack: list[tuple[Path, bool]] = [(root, False)]
 
     while stack:
@@ -279,7 +241,6 @@ def _prune_empty_dirs(root: Path) -> int:
         if dir_path == root:
             continue
         try:
-            # After children have been processed (and possibly removed), check emptiness.
             if not any(dir_path.iterdir()):
                 dir_path.rmdir()
                 removed += 1
@@ -290,12 +251,10 @@ def _prune_empty_dirs(root: Path) -> int:
 
 
 def _confirm_overwrite(path: Path) -> bool:
-    """Prompt the user whether to overwrite a differing file. Default is yes."""
     while True:
         try:
             ans = input(f"  Diff at {path} — overwrite? [Y/n] ").strip().lower()
         except EOFError:
-            # Non-interactive stdin (piped / CI): fall back to overwrite.
             return True
         if ans in ("", "y", "yes"):
             return True
@@ -305,13 +264,6 @@ def _confirm_overwrite(path: Path) -> bool:
 
 
 def _maybe_write(path: Path, content: str, interactive: bool) -> str:
-    """Write *content* to *path* only when needed.
-
-    Returns one of:
-      "written"   — file was created or content changed and was written
-      "unchanged" — existing file already had identical content
-      "skipped"   — interactive mode and user declined overwrite
-    """
     if path.is_file():
         try:
             existing = path.read_text(encoding="utf-8")
@@ -355,19 +307,8 @@ def extract(
         top_items = [c for c in root if c.tag == "Item"]
         keep_map = _compute_keep_map(top_items)
 
-    # Per-parent set of base names *assigned during this export run*.
-    # Pre-existing paths on disk are intentionally *not* seeded here so a
-    # re-export reuses the same path instead of inventing Name_2 / Name_3.
-    # True sibling collisions within the place (two instances, same Name)
-    # still uniquify so both can be represented on disk.
-    # On case-insensitive filesystems the keys are casefolded so "Foo"/"foo"
-    # cannot silently overwrite each other.
     used_names: dict[Path, set[str]] = {}
 
-    # Iterative DFS (explicit stack) so deep place hierarchies cannot hit the
-    # default Python recursion limit, and so we can emit progress while walking
-    # large Workspace subtrees under --all.
-    # Seed with top-level Items in reverse so LIFO yields document order.
     stack: list[tuple[ET.Element, Path]] = []
     for top in reversed(list(root.findall("Item"))):
         stack.append((top, out))
@@ -453,12 +394,10 @@ def extract(
 
             if will_write_children:
                 full_path.mkdir(parents=True, exist_ok=True)
-                # push reversed so children are processed in document order
                 for child in reversed(child_items):
                     stack.append((child, full_path))
             continue
 
-        # Non-script
         full_path.mkdir(parents=True, exist_ok=True)
         meta = {
             "ClassName": class_name,
@@ -480,11 +419,9 @@ def extract(
             )
         )
 
-        # push reversed so children are processed in document order
         for child in reversed(list(item)):
             stack.append((child, full_path))
 
-    # Final safety net for both modes: never leave empty directories
     pruned = _prune_empty_dirs(out)
 
     if scripts_only:
@@ -501,8 +438,7 @@ def extract(
     if pruned:
         print(f"  Empty dirs removed: {pruned}")
 
-    # Touched-file tracking: record simple numeric hashes + mtimes so later
-    # import / verde-sync can skip unchanged work and apply mtime-wins.
+    # Touched-file tracking for later import / verde-merge (mtime-win).
     try:
         from features.sync import write_manifest
 
@@ -515,9 +451,8 @@ def extract(
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Export a Roblox .rbxlx into a searchable/editable folder tree "
-            "(alias: verde-extract). Existing paths are reused; files are "
-            "overwritten only when content differs."
+            "Export a Roblox .rbxlx into a searchable/editable folder tree (CLI: verde-export). "
+            "Existing paths are reused; files are overwritten only when content differs."
         )
     )
     parser.add_argument("rbxlx", help="Path to .rbxlx file")
