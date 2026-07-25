@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "verde"
+version = "0.0.0"
+description = "Minimal Roblox Studio place export/import utility — lightweight alternative to Rojo (Python + Luau + Studio plugin)"
+readme = "README.md"
+license = { text = "Unlicense" }
+authors = [{ name = "misterdustinface" }]
+requires-python = ">=3.9.6"
+keywords = ["roblox", "rbxlx", "version-control", "export", "import", "luau", "plugin"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: The Unlicense (Unlicense)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Games/Entertainment",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+verde-export = "extract:main"
+verde-extract = "extract:main"
+verde-import = "build:main"
+verde-merge = "build:main"
+verde-sync = "features.sync:main"
+verde-search = "features.search:main"
+verde-replace = "features.set_replace:main"
+verde-set = "features.set_replace:main"
+verde-tags = "features.tags:main"
+verde-test-roundtrip = "test_roundtrip:main"
+
+[tool.setuptools]
+package-dir = { "" = "python" }
+packages = ["features"]
+py-modules = [
+    "extract",
+    "build",
+    "interesting",
+    "test_roundtrip",
+    "attributes",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["python/tests"]
+pythonpath = ["python"]
