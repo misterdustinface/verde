@@ -105,64 +105,68 @@ Treat Instance Attributes the same way Tags are treated today: extract them into
 
 **Status**  
 Foundation complete:
-- `python/attributes.py` — full decode/encode for the AttributesSerialize binary format (string, bool, int32, float32/64, UDim, UDim2, BrickColor, Color3, Vector2/3, CFrame, EnumItem, NumberSequence, ColorSequence, NumberRange, Rect, Font).
-- `extract.py` parses `AttributesSerialize` into top-level `meta["Attributes"]` and removes the opaque BinaryString from `Properties`.
+- `python/attributes.py` — full decode/encode for the AttributesSerialize binary format.
+- `extract.py` parses `AttributesSerialize` into top-level `meta["Attributes"]`.
 - `build.py` re-emits a correct `AttributesSerialize` BinaryString when `meta["Attributes"]` is present.
 - Unit tests in `python/tests/test_attributes.py`.
 
 Still open:
 - Extend `matches` / search CLI with `--attr Name` and `--attr-value …`.
 - In the Luau module, add thin wrappers around `GetAttribute` / `SetAttribute` that mirror the existing tag helpers.
-- Keep Attributes out of the “interesting properties” list unless explicitly requested; they are orthogonal to the classic property system.
+- Keep Attributes out of the “interesting properties” list unless explicitly requested.
 
 ---
 
-## 9. Touched-file tracking + verde-sync
+## 9. Touched-file tracking + offline merge (CLI: `verde-merge`)
 
 **Description**  
-Track which files in an extracted Verde tree have changed (simple numeric content hash + mtime) so that export/import can skip unchanged work and so a `verde-sync` command can keep the folder and a `.rbxlx` (or later a live Studio DataModel) in agreement.
+Track which files in an extracted Verde tree have changed (simple numeric content hash + mtime) so that export/import can skip unchanged work and so **`verde-merge`** can keep the folder and a `.rbxlx` in agreement offline.
 
-**Conflict rule**  
-When the same instance has been modified on both sides, the **most recently modified** side wins and is replicated to the other. File mtime is the authority for the Verde side; the `.rbxlx` file mtime is the authority for the Roblox side when a per-instance timestamp is unavailable.
+**Conflict rule (today)**  
+Most recently modified side wins (mtime-win).
+
+**Future improvement**  
+Replace pure mtime-win with **git-merge-style conflict resolution** when both sides changed the same logical content (manual or 3-way merge), instead of silently picking one mtime.
 
 **Hash**  
-Use a simple, efficient non-cryptographic numeric hash of the file content (stdlib `zlib.adler32`). Only needs to turn a string/bytes into a stable integer for change detection; collisions are acceptable for this use-case.
-
-**Recommendations & options**
-- Manifest stored at `<extracted>/.verde/manifest.json`:
-  ```json
-  {
-    "version": 1,
-    "rbxlx": "/absolute/or/relative/path/to/Place.rbxlx",
-    "rbxlx_mtime": 1721…,
-    "last_sync": 1721…,
-    "files": {
-      "Workspace/Main.lua": {"h": 1234567890, "m": 1721…},
-      "Workspace/Main.robloxmeta.json": {"h": …, "m": …}
-    }
-  }
-  ```
-- On every successful `verde-export` / extract, rewrite the manifest with current hashes + mtimes of every `.lua` / `.local.lua` / `.module.lua` and every `.robloxmeta.json`.
-- On `verde-import`, if a manifest is present:
-  - Skip any file whose current `(hash, mtime)` matches the recorded entry (fast path — no XML apply).
-  - When a file’s content has changed, apply the existing differential import only if the Verde file’s mtime is ≥ the recorded / `.rbxlx` mtime (mtime-wins rule).
-- `verde-sync extracted/ Place.rbxlx`:
-  - Push dirty Verde → `.rbxlx` using the rules above.
-  - If the `.rbxlx` is newer than `last_sync` and no Verde files are dirty, optionally pull (full or selective re-extract). Full re-extract is the safe first implementation; selective pull can come later with #7.
-- Keep the current full-walk behaviour as the fallback when no manifest exists.
-- Future: live Studio bridge that uses the same dirty-set + Referent matching already present in the Luau module.
+`zlib.adler32` — stable integer for change detection.
 
 **Status**  
 Foundation complete:
-- `python/features/sync.py` — `content_hash` (zlib.adler32), load/write manifest, `is_file_dirty` / `dirty_paths` with mtime-win, `verde-sync` CLI.
-- `extract.py` writes `.verde/manifest.json` after every successful export.
-- `build.py` / `verde-import` skips clean files via the manifest and refreshes the manifest after a successful import.
-- Entry point: `verde-sync`.
+- `python/features/sync.py` — manifest helpers + **`verde-merge`** CLI.
+- `extract.py` writes `.verde/manifest.json` after export.
+- `build.py` / `verde-import` skips clean files via the manifest.
 
 Still open:
-- Selective pull (instead of full re-export when `.rbxlx` is newer) once #7 lands.
-- Live Studio DataModel bridge.
+- Selective pull once #7 lands.
+- Git-merge-style conflicts for `verde-merge`.
 
 ---
 
-*Prioritise items 1–3 for correctness and large-place usability. Items 4–5 improve workflow integration. Items 6–9 are natural extensions once the core round-trip is solid.*
+## 10. Live Sync with open Studio (CLI: `verde-sync`)
+
+**Description**  
+Bi-directional event-driven sync between an extracted folder and an **open** Studio place (scripts-first).
+
+**Shipped on `feature/live-bridge` (v1.0.0):**
+- `python/features/bridge.py` → **`verde-sync`** (fixed localhost port 3847, not user-facing)
+- Plugin **Live Sync** toggle + full scan-and-sync on enable
+- Scripts-only default watch; experimental property sync **off** by default
+- Referent / UniqueId–first matching; **scripts-only UniqueId map** on connect (full map only if a future all-instance mode is enabled)
+- Actionable setup errors; artist-oriented README
+
+**Still open before treating Live Sync as fully artist-ready:**
+- [ ] Large-place hitch test (default mode)
+- [ ] Manual Referent / path edge cases (renames, `Name_2` collisions, missing Referent)
+- [ ] Plugin install path for non-coders (beyond paste ModuleScript)
+- [ ] Manual matrix + optional HTTP smoke tests
+- [ ] `verde-merge` design note / implementation for git-merge-style conflicts (see §9)
+
+**Explicit non-goals (for now):**
+- Watching every Part / full DataModel property fan-out
+- Auto-creating or deleting instances from disk
+- User-configurable ports in the UI
+
+---
+
+*Prioritise items 1–3 for correctness and large-place usability. Items 4–5 improve workflow integration. Items 6–10 extend iterative and live workflows.*

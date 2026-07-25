@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """
-Touched-file tracking and verde-sync helpers.
+Touched-file tracking and verde-merge helpers.
+
+CLI: verde-merge — bring an extracted folder and a .rbxlx into agreement using
+manifest hashes + mtime-win (most recently modified side wins).
+
+Future improvement: real git-merge-style conflict resolution when both sides
+changed the same logical instance (see docs / TODO).
 
 Manifest lives at <extracted>/.verde/manifest.json and records a simple numeric
 content hash (zlib.adler32) + mtime for every .lua / .robloxmeta.json so that
 import can skip unchanged files and conflicts can be resolved by "most recently
-modified wins".
+modified wins" today.
 """
 
 from __future__ import annotations
@@ -22,7 +28,6 @@ MANIFEST_DIR = ".verde"
 MANIFEST_NAME = "manifest.json"
 MANIFEST_VERSION = 1
 
-# File suffixes we track for change detection
 TRACKED_SUFFIXES = (
     ".lua",
     ".local.lua",
@@ -32,17 +37,13 @@ TRACKED_SUFFIXES = (
 
 
 def content_hash(data: str | bytes) -> int:
-    """Simple, fast numeric hash of file content (stdlib zlib.adler32).
-
-    Only needs to turn a string/bytes into a stable integer for change detection.
-    """
+    """Simple, fast numeric hash of file content (stdlib zlib.adler32)."""
     if isinstance(data, str):
         data = data.encode("utf-8")
     return zlib.adler32(data) & 0xFFFFFFFF
 
 
 def _file_entry(path: Path) -> dict[str, Any] | None:
-    """Return {h, m} for a tracked file, or None if unreadable."""
     try:
         raw = path.read_bytes()
         st = path.stat()
@@ -62,12 +63,10 @@ def _is_tracked(path: Path) -> bool:
 
 
 def collect_file_entries(root: Path) -> dict[str, dict[str, Any]]:
-    """Walk root and build relpath → {h, m} for every tracked file."""
     files: dict[str, dict[str, Any]] = {}
     for p in root.rglob("*"):
         if not p.is_file() or not _is_tracked(p):
             continue
-        # Skip anything under .verde itself
         try:
             rel = p.relative_to(root)
         except ValueError:
@@ -99,11 +98,7 @@ def write_manifest(
     rbxlx_path: str | Path | None = None,
     extra: dict[str, Any] | None = None,
 ) -> Path:
-    """Write / overwrite the manifest after a successful extract or sync.
-
-    Records current hashes + mtimes of all tracked files under root, plus
-    optional rbxlx path/mtime and last_sync timestamp.
-    """
+    """Write / overwrite the manifest after a successful extract or merge."""
     root = Path(root)
     manifest_dir = root / MANIFEST_DIR
     manifest_dir.mkdir(parents=True, exist_ok=True)
@@ -142,16 +137,6 @@ def is_file_dirty(
     *,
     rbxlx_mtime: float | None = None,
 ) -> bool:
-    """Return True if the file at root/rel should be considered changed.
-
-    Rules:
-    - No manifest → always dirty (safe full path).
-    - Missing from manifest → dirty.
-    - Current hash or mtime differs from recorded → dirty.
-    - Conflict / mtime-win: if the Verde file’s mtime is older than the
-      recorded rbxlx_mtime (Roblox side is newer), treat as *not* dirty for
-      a push, so the more recent Roblox side wins.
-    """
     path = root / rel
     if not path.is_file():
         return False
@@ -173,10 +158,8 @@ def is_file_dirty(
     if not hash_differs and not mtime_differs:
         return False
 
-    # Content changed. Apply mtime-wins against the Roblox side.
     recorded_rbxlx_m = manifest.get("rbxlx_mtime")
     if recorded_rbxlx_m is not None:
-        # If the .rbxlx itself is newer than this Verde file, Roblox wins → not dirty for push.
         if entry["m"] < float(recorded_rbxlx_m):
             return False
     if rbxlx_mtime is not None and entry["m"] < rbxlx_mtime:
@@ -191,7 +174,6 @@ def dirty_paths(
     *,
     rbxlx_mtime: float | None = None,
 ) -> set[str]:
-    """Return the set of relative paths that are dirty under the mtime-win rule."""
     if manifest is None:
         manifest = load_manifest(root)
     dirty: set[str] = set()
@@ -210,19 +192,22 @@ def dirty_paths(
 
 
 def main() -> None:
-    """verde-sync: push dirty Verde files → .rbxlx (mtime-win), or pull if .rbxlx is newer."""
+    """verde-merge: push dirty folder files → .rbxlx (mtime-win), or pull if .rbxlx is newer.
+
+    Note: conflict handling is currently mtime-wins only. A future improvement is
+    git-merge-style resolution when both sides edited the same content.
+    """
     parser = argparse.ArgumentParser(
         description=(
-            "Sync an extracted Verde folder with a .rbxlx. "
-            "Most-recently-modified side wins. Uses a simple numeric content hash "
-            "(adler32) + mtime tracking in .verde/manifest.json."
+            "Merge an extracted Verde folder with a .rbxlx (offline). "
+            "Most-recently-modified side wins today. "
+            "Future: git-merge-style conflict resolution. "
+            "Uses adler32 + mtime tracking in .verde/manifest.json. "
+            "For live Studio updates while a place is open, use verde-sync instead."
         )
     )
     parser.add_argument("extracted_dir", help="Path to extracted Verde folder")
-    parser.add_argument(
-        "rbxlx",
-        help="Path to the .rbxlx place file",
-    )
+    parser.add_argument("rbxlx", help="Path to the .rbxlx place file")
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -255,13 +240,11 @@ def main() -> None:
     )
 
     if dirty:
-        print(f"Pushing {len(dirty)} dirty file(s) from {root} → {rbxlx}")
+        print(f"Merging {len(dirty)} dirty file(s) from {root} → {rbxlx}")
         if args.dry_run:
             for rel in sorted(dirty):
                 print(f"  · {rel}")
             return
-        # Re-use the differential import; it already skips content-identical
-        # instances. The dirty set just tells us work is needed.
         from build import import_rbxlx
 
         import_rbxlx(str(root), str(rbxlx))
@@ -270,19 +253,18 @@ def main() -> None:
         return
 
     if rbxlx_is_newer:
-        print(f".rbxlx is newer than last sync → pulling (full export)")
+        print(".rbxlx is newer than last merge → pulling (full export)")
         if args.dry_run:
             print("  (would run verde-export)")
             return
         from extract import extract
 
-        # Full export for now; selective pull can arrive with TODO #7.
         extract(str(rbxlx), str(root), scripts_only=True)
         write_manifest(root, rbxlx_path=rbxlx)
         print("Manifest updated after pull.")
         return
 
-    print("Nothing to sync — folder and .rbxlx are in agreement.")
+    print("Nothing to merge — folder and .rbxlx are in agreement.")
 
 
 if __name__ == "__main__":

@@ -1,71 +1,127 @@
 # Verde
 
-**Get your Roblox place organized, searchable, and editable — without writing code.**
+**Edit Roblox scripts in a normal text editor — and see the changes in Studio without reopening the place.**
 
-Verde is a small toolkit that works right inside Roblox Studio.  
-It lets artists, designers, and builders quickly find objects, change properties in bulk, manage tags, and back up scripts.
-
-**Version 0.0.0** · Free & open source ([Unlicense](LICENSE))
+Verde also helps you search the place, change properties in bulk, and manage tags.  
+**Version 1.0.0** · Free & open source ([Unlicense](LICENSE))
 
 ---
 
-## What can I do with Verde?
+## The important part: Live Sync
 
-Once the plugin is installed you can:
+If you edit scripts as files on disk (or someone on your team does), **Live Sync** is how Studio stays up to date **while the place stays open**.
 
-- **Search** your whole place for Parts, Sounds, Models, or anything else by name, class, or tag
-- **Change properties in bulk** — e.g. turn off CastShadow on every Part, or set Anchored on everything tagged FROZEN
-- **Rename or list tags** across the entire place
-- **Dump & restore scripts** — make a quick backup of all scripts, then put them back later
+Without it, changing files and running `verde-import` only updates the `.rbxlx` on disk — **Studio does not reload an open place**. You would have to close and reopen. Live Sync fixes that.
 
-Everything happens live in Studio. No external tools required for everyday use.
+### What you need once
+
+1. **Python tools installed** (a programmer on the team can do this once):
+   ```bash
+   git clone https://github.com/misterdustinface/verde.git
+   cd verde
+   pip install -e ".[dev]"
+   ```
+2. **Verde Studio plugin installed** — see [Install the Studio plugin](#install-the-studio-plugin-once) below.
+3. **Allow HTTP in the place** (required for Live Sync):
+   - In Studio: **Home → Game Settings → Security**
+   - Turn **Allow HTTP Requests** **ON**
+   - Save
+
+### Everyday Live Sync (do this whenever you work)
+
+**Terminal (leave this window open):**
+```bash
+# Folder from a previous export, e.g. code/
+verde-sync code/
+```
+
+**Roblox Studio:**
+1. Open your place
+2. Open the **Verde** panel (toolbar button)
+3. Click **Live Sync** so it shows **ON**
+
+You should see a “Connected” message and the folder path.
+
+| You do this… | What happens |
+|--------------|--------------|
+| Edit a script **in Studio** | The matching `.lua` file on disk updates |
+| Edit a `.lua` file **in your editor** | Studio updates that script’s Source (no reopen) |
+
+**Default:** only **script Source** is live-synced (safe on large places).  
+**Experimental:** optional property sync on scripts — off by default in the panel.
+
+Matching prefers **Referent / UniqueId** from `.robloxmeta.json`, then hierarchy path. The UniqueId map is **scripts-only** by default (same as the watch set).
+
+### If Live Sync fails
+
+| Message | Fix |
+|---------|-----|
+| Studio is blocking the connection (HttpService) | **Game Settings → Security → Allow HTTP Requests = ON** |
+| Cannot reach Live Sync (`verde-sync` not running) | Run `verde-sync path/to/extracted` and **leave it running** |
+| Lost connection | Restart `verde-sync`, turn Live Sync **ON** again |
+| N file(s) had no matching script | Re-export after renames, or fix folder paths to match Studio |
+
+More detail for programmers: [docs/SYSTEM_OVERVIEW.md](docs/SYSTEM_OVERVIEW.md) and [plugin/README.md](plugin/README.md).
 
 ---
 
-## Install the Studio plugin (5 minutes)
+## First-time export (usually done by a programmer once)
 
-You only need to do this once.
+```bash
+verde-export MyPlace.rbxlx code/
+```
 
-1. Download or clone this repository so you have the files on your computer.
-2. In Roblox Studio go to the **Plugins** tab → **Plugins Folder** (or create a new local plugin).
-3. Create a **ModuleScript** and name it exactly `Verde`.
-4. Open [`luau/Verde.luau`](luau/Verde.luau), copy **all** of its contents, and paste them into the ModuleScript.
-5. (Recommended) Right-click the `Verde` ModuleScript → Insert Object → **ModuleScript**, name it `interesting_properties`, then paste the contents of [`luau/interesting_properties.luau`](luau/interesting_properties.luau) into it.
-6. Create a **Script** (not a LocalScript) next to the Verde ModuleScript and paste the contents of [`plugin/VerdePlugin.server.luau`](plugin/VerdePlugin.server.luau) into it.
-7. Save the plugin and restart Studio (or reload plugins).
-
-You should now see the **Verde** panels in the Studio UI (Search, Set, Tags, Dump/Restore).
-
-> Full install notes and screenshots live in [plugin/README.md](plugin/README.md).
+That creates a `code/` folder with script files you can edit. Point `verde-sync` at that same folder.
 
 ---
 
-## Everyday workflow
+## Install the Studio plugin (once)
 
-1. Open your place in Studio.
-2. Use the **Search** panel to find what you need (by name, class, tag, or property value).
-3. Use the **Set** panel to change properties on the results (you can limit the change to a tag or class, and you can undo).
-4. Use the **Tags** panel to list every tag or rename one everywhere it appears.
-5. Use **Dump Scripts** when you want a backup of all script sources (they appear under ServerStorage). Use **Restore** later if needed.
+1. Have this repository on your computer.
+2. In Roblox Studio: **Plugins** → open or create a **local plugin**.
+3. Create a **ModuleScript** named exactly `Verde`.
+4. Copy all of [`luau/Verde.luau`](luau/Verde.luau) into it.
+5. (Recommended) Add a child **ModuleScript** named `interesting_properties` and paste [`luau/interesting_properties.luau`](luau/interesting_properties.luau).
+6. Create a **Script** next to `Verde` and paste [`plugin/VerdePlugin.server.luau`](plugin/VerdePlugin.server.luau).
+7. Save / reload plugins.
 
-That’s it — you can stay inside Studio the whole time.
+You should see the **Verde** toolbar button and panel (**Live Sync**, Search, Set, Tags).
+
+Full notes: [plugin/README.md](plugin/README.md).
 
 ---
 
-## Optional: work with place files on disk
+## Other things you can do in Studio (no Live Sync required)
 
-If you (or a programmer on your team) want to export a place into folders so you can edit scripts in a normal text editor or put the project under version control, Verde also has offline tools. Those are documented in the technical overview:
+These work with the plugin alone:
 
-→ **[System Overview](docs/SYSTEM_OVERVIEW.md)** (for developers)
+- **Search** the place by name, class, tag, or property
+- **Set / replace properties** in bulk (with undo)
+- **List or rename tags** across the place
 
-You do **not** need those tools for the Studio plugin to work.
+You do **not** need `verde-sync` for search / set / tags.
+
+---
+
+## Optional offline tools (programmers)
+
+→ **[System Overview](docs/SYSTEM_OVERVIEW.md)**
+
+| Command | Purpose |
+|---------|---------|
+| `verde-export` | Place file → folder of scripts / meta |
+| `verde-import` | Folder → update `.rbxlx` **on disk** |
+| `verde-merge` | Offline folder ↔ `.rbxlx` using manifest + mtime-win (future: git-merge-style conflicts) |
+| `verde-sync` | **Live** link folder ↔ **open** Studio |
+| `verde-search` / `verde-set` / `verde-tags` | Offline helpers |
+
+Remember: **`verde-import` / `verde-merge` alone do not refresh an already-open Studio place.** Use **`verde-sync`** + the plugin Live Sync toggle for that.
 
 ---
 
 ## Need help?
 
-- Plugin install & features → [plugin/README.md](plugin/README.md)
-- Full technical details, CLI commands, and project layout → [docs/SYSTEM_OVERVIEW.md](docs/SYSTEM_OVERVIEW.md)
+- Plugin install → [plugin/README.md](plugin/README.md)
+- Full technical docs → [docs/SYSTEM_OVERVIEW.md](docs/SYSTEM_OVERVIEW.md)
+- Planned work → [docs/TODO_FEATURES.md](docs/TODO_FEATURES.md)
 - Known issues → [docs/BUGS.md](docs/BUGS.md)
-
-Verde is intentionally small and focused. If something is confusing, open an issue on the repository — we want it to be easy for non-programmers too.

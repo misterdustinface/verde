@@ -1,6 +1,6 @@
 # Bugs
 
-Known correctness and data-loss issues in verde (v0.0.0).
+Known correctness and data-loss issues in verde (**v1.0.0**).
 Focus is on extract/import round-trips, Luau live operations, and shared helpers.
 
 ---
