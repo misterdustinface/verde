@@ -133,7 +133,7 @@ function Verde.replaceProp(propName: string, oldValue: string, newValue: any, op
 	local changed = 0
 	for _, inst in candidates do
 		local ok, current = pcall(function() return (inst :: any)[propName] end)
-		if ok and current ~= nil and tostring(current) == oldValue then
+		if ok and current ~= nil and lower(tostring(current)) == lower(oldValue) then
 			if pcall(function() (inst :: any)[propName] = coercedNew end) then
 				changed += 1
 			end
