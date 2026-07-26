@@ -769,8 +769,17 @@ function Verde.applyMeta(target: Instance, meta: { [string]: any }): boolean
 	end
 
 	if typeof(meta.Attributes) == "table" then
+		local want: { [string]: any } = {}
 		for name, value in meta.Attributes :: { [string]: any } do
-			local decoded = decodeValue(value)
+			want[name] = decodeValue(value)
+		end
+		for name, _ in target:GetAttributes() do
+			if want[name] == nil then
+				pcall(function() target:SetAttribute(name, nil) end)
+				changed = true
+			end
+		end
+		for name, decoded in want do
 			local ok, cur = pcall(function() return target:GetAttribute(name) end)
 			if ok and not valuesEqual(cur, decoded) then
 				pcall(function() target:SetAttribute(name, decoded) end)
