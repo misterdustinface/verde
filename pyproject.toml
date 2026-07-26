@@ -42,6 +42,7 @@ verde-search = "features.search:main"
 verde-replace = "features.set_replace:main"
 verde-set = "features.set_replace:main"
 verde-tags = "features.tags:main"
+verde-status = "features.status:main"
 verde-test-roundtrip = "test_roundtrip:main"
 
 [tool.setuptools]
