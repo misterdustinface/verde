@@ -1,7 +1,9 @@
 # Bugs
 
-Known correctness and data-loss issues in verde (**v1.0.0**).
-Focus is on extract/import round-trips, Luau live operations, and shared helpers.
+True defects in current behaviour of verde (**v1.0.0**).
+Missing features and intentional design choices live in `TODO_FEATURES.md`.
+
+**Important design principle:** Case sensitivity of properties and tags is intentional and valuable. Roblox itself treats tags and many property string values as case-sensitive. Verde’s live Luau path therefore preserves exact case for final set/replace operations. Case-insensitive filters exist only as a discovery aid; when they produce ambiguous matches that differ only by case, the preferred future behaviour is interactive prompting (see TODO_FEATURES #11), not silent case-folding of the final value.
 
 ---
 
@@ -11,10 +13,26 @@ Focus is on extract/import round-trips, Luau live operations, and shared helpers
 
 `Verde.restoreScripts` currently *adds* the archived tags (from the `Tags` attribute) without first removing any tags already present on the target. Restore therefore merges rather than replaces the tag set. Clearing via `CollectionService:GetTags` + `RemoveTag` before adding the archived set would make restore replace, matching the documented intent and the Python-side tag handling philosophy.
 
-### 2. Tag matching is case-inconsistent (Python vs Luau)
+**Impact**  
+Correctness / data fidelity on restore.
 
-- **Python** `verde-tags --replace` and search filters perform case-insensitive matching (consistent with the rest of the CLI). The original-cased tag is removed and the new tag is added.
-- **Luau** `Verde.replaceTag` still uses `CollectionService:HasTag` / `RemoveTag` / `AddTag` with exact (case-sensitive) match. Roblox tags are case-sensitive, so this is intentional for live DataModel fidelity, but it diverges from the Python CLI’s case-insensitive behaviour.
+---
+
+## Intentional design (not bugs)
+
+These behaviours are deliberate and should not be “fixed” without an explicit product decision:
+
+- **Case-sensitive final checks for properties and tags (Luau)**  
+  `Verde.replaceProp` uses exact `tostring(current) == oldValue`. `Verde.replaceTag` uses exact `CollectionService:HasTag` / `RemoveTag` / `AddTag`. This matches Roblox’s own case-sensitive semantics and is considered an important feature.
+
+- **Case-insensitive discovery filters**  
+  `Verde.search` (and the Python CLI search/tag filters) treat nameContains / propContains / tag filters case-insensitively so users can locate instances more easily. This is discovery-only; final mutation remains exact-case.
+
+- **Python CLI vs Luau divergence on tags**  
+  The offline Python path (`verde-tags --replace`, search filters) currently performs case-insensitive matching for convenience. The live Luau path stays case-sensitive. This split is accepted; aligning Python toward exact-case (or adding an explicit `--ignore-case` flag) can be tracked as a future enhancement if desired, but is not treated as a defect.
+
+- **Scripts-only default on export**  
+  Only directories that lead to scripts are written; empty directories are pruned. Use `--all` for the full hierarchy. Documented and intentional.
 
 ---
 
@@ -25,10 +43,8 @@ Focus is on extract/import round-trips, Luau live operations, and shared helpers
 - **Child order** is not preserved (Python import sorts `iterdir()`). Usually harmless but prevents byte-identical round-trips.
 - **Fragile interesting-props extraction** (`interesting.py`): a simple regex works today but will be polluted by any future double-quoted string in the Luau file.
 - **Plugin recording**: no user feedback when `ChangeHistoryService:TryBeginRecording` returns `nil` (playtest, concurrent recording, etc.).
-- **Scripts-only default** (export): only directories that lead to scripts are written; empty directories are always pruned (both modes). Use `--all` for the full hierarchy. This is intentional and documented in the README / extract docstring.
 - **Attributes**: full binary round-trip for AttributesSerialize is supported; search/filter by attribute and Luau wrappers remain open (see TODO #8).
 - **Orphaned uniquified paths**: if a previous export created `Name_2` because of a sibling collision that no longer exists, a later re-export will write to `Name` and leave the old `Name_2` on disk. Empty-dir prune does not remove non-empty leftovers.
-- **Case-insensitive search + exact replaceProp** (Luau): `Verde.search` treats `propContains` case-insensitively while `Verde.replaceProp` keeps an exact `tostring(current) == oldValue` final check. This is intentional (case sensitivity matters for properties and tags). When multiple case-insensitive matches exist, interactive disambiguation / prompting is a planned feature (see TODO_FEATURES).
 
 ---
 
@@ -45,4 +61,4 @@ These correctness problems were fixed during development and are no longer prese
 
 ---
 
-*Open items are the restore tag replacement behaviour, and the intentional Python/Luau tag case divergence. The case-sensitivity behaviour of search vs replaceProp is intentional; interactive prompting for ambiguous matches is tracked as a feature request.*
+*Only true defects belong here. Case sensitivity of properties and tags is an important intentional feature; interactive handling of ambiguous case-insensitive search results is tracked in TODO_FEATURES #11.*
