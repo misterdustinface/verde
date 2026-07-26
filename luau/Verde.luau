@@ -365,18 +365,17 @@ function Verde.restoreScripts(options: RestoreOptions?): (number, number, number
 		if runContext ~= nil then
 			pcall(function() (target :: any).RunContext = Enum.RunContext[runContext :: string] end)
 		end
-		if typeof(tagsAttr) == "string" then
-			-- Replace (do not merge) the tag set so restore matches documented intent
-			-- and the same philosophy used by applyMeta / Python-side tag handling.
-			for _, existing in CollectionService:GetTags(target) do
-				CollectionService:RemoveTag(target, existing)
-			end
-			if (tagsAttr :: string) ~= "" then
-				for _, tag in string.split(tagsAttr :: string, ",") do
-					tag = (tag:match("^%s*(.-)%s*$") or tag)
-					if tag ~= "" then
-						CollectionService:AddTag(target, tag)
-					end
+		-- Always replace the tag set so restore matches the archived state
+		-- (including the case where dump omitted the Tags attribute because
+		-- the original script had zero tags). Matches applyMeta / Python.
+		for _, existing in CollectionService:GetTags(target) do
+			CollectionService:RemoveTag(target, existing)
+		end
+		if typeof(tagsAttr) == "string" and (tagsAttr :: string) ~= "" then
+			for _, tag in string.split(tagsAttr :: string, ",") do
+				tag = (tag:match("^%s*(.-)%s*$") or tag)
+				if tag ~= "" then
+					CollectionService:AddTag(target, tag)
 				end
 			end
 		end
@@ -652,7 +651,7 @@ local function decodeValue(encoded: any): any
 		local kps = {}
 		for _, kp in (encoded.Keypoints or {}) do
 			local v = kp.Value or {}
-			table.insert(kps, ColorSequenceKeypoint.new(kp.Time or 0, Color3.new(v.R or 0, v.G or 0, v.B or 0)))
+			table insert(kps, ColorSequenceKeypoint.new(kp.Time or 0, Color3.new(v.R or 0, v.G or 0, v.B or 0)))
 		end
 		if #kps >= 2 then return ColorSequence.new(kps) end
 	elseif ty == "NumberSequence" then
