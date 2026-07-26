@@ -7,22 +7,22 @@ Pure defects remain in `BUGS.md`.
 
 ## APPROVED
 
-*(Existing numbered items below are treated as the current planned set; formal priority sections can be refined later. New work from Inspire lands only under PENDING APPROVAL.)*
+Ordered by smartest implementation sequence (correctness and large-place foundations first, then Live Sync polish, then plugin/CLI usability).
 
-## 1. Streaming search / replace on live `.rbxlx`
+### 1. Preserve root-level Meta / External / SharedStrings
 
 **Description**  
-Operate on a `.rbxlx` file in place (or via a temporary copy) without a full extract → edit → rebuild cycle. Useful for large places where disk I/O and intermediate folder trees are expensive.
+Some `.rbxlx` files contain top-level elements outside the main `Item` tree (`Meta`, `External`, `ExternalAssets`, `SharedStrings`, etc.). These are currently dropped on extract/build.
 
 **Recommendations & options**
-- **SAX / iterative parser** (preferred for memory): walk the XML with `xml.etree.ElementTree.iterparse` (or `lxml` if added as an optional dependency). Match `Item` elements on the fly, apply set/replace, and write a new file.
-- **In-memory DOM with selective rewrite**: parse once, mutate matching nodes, then serialise. Simpler but higher peak memory.
-- CLI shape: `verde-search --rbxlx Place.rbxlx …` and `verde-set --rbxlx Place.rbxlx …` that accept the same filters as the folder-based commands.
-- Keep the existing folder-based tools as the default; make streaming an explicit flag or sub-command so behaviour stays predictable.
+- On extract, write a special top-level file (e.g. `.robloxroot.json` or `meta/root.xml` fragments) that stores any non-`Item` children of the `<roblox>` root.
+- On build, re-insert those fragments in the original order before or after the instance tree.
+- Minimal viable approach: capture the raw XML snippets of unknown root children and round-trip them verbatim.
+- Document that places using SharedString tables or external asset references will now survive a round-trip.
 
 ---
 
-## 2. Richer property round-tripping for complex / rare types
+### 2. Richer property round-tripping for complex / rare types
 
 **Description**  
 Improve fidelity for property types that currently lose information or are only partially reconstructed (NumberSequence / ColorSequence keypoints, PhysicalProperties, FontFace, Content, SharedString references, Attributes, etc.).
@@ -36,60 +36,20 @@ Improve fidelity for property types that currently lose information or are only 
 
 ---
 
-## 3. Preserve root-level Meta / External / SharedStrings
+### 3. Streaming search / replace on live `.rbxlx`
 
 **Description**  
-Some `.rbxlx` files contain top-level elements outside the main `Item` tree (`Meta`, `External`, `ExternalAssets`, `SharedStrings`, etc.). These are currently dropped on extract/build.
+Operate on a `.rbxlx` file in place (or via a temporary copy) without a full extract → edit → rebuild cycle. Useful for large places where disk I/O and intermediate folder trees are expensive.
 
 **Recommendations & options**
-- On extract, write a special top-level file (e.g. `.robloxroot.json` or `meta/root.xml` fragments) that stores any non-`Item` children of the `<roblox>` root.
-- On build, re-insert those fragments in the original order before or after the instance tree.
-- Minimal viable approach: capture the raw XML snippets of unknown root children and round-trip them verbatim.
-- Document that places using SharedString tables or external asset references will now survive a round-trip.
+- **SAX / iterative parser** (preferred for memory): walk the XML with `xml.etree.ElementTree.iterparse` (or `lxml` if added as an optional dependency). Match `Item` elements on the fly, apply set/replace, and write a new file.
+- **In-memory DOM with selective rewrite**: parse once, mutate matching nodes, then serialise. Simpler but higher peak memory.
+- CLI shape: `verde-search --rbxlx Place.rbxlx …` and `verde-set --rbxlx Place.rbxlx …` that accept the same filters as the folder-based commands.
+- Keep the existing folder-based tools as the default; make streaming an explicit flag or sub-command so behaviour stays predictable.
 
 ---
 
-## 4. Optional Rojo-compatible project layout export
-
-**Description**  
-Emit a folder structure and `default.project.json` that Rojo (or Argon / similar) can consume directly, so teams can move between verde’s lightweight workflow and a full Rojo pipeline.
-
-**Recommendations & options**
-- New command: `verde-export-rojo extracted/ --out rojo-project/`.
-- Map scripts to the conventional `.server.lua` / `.client.lua` / `.lua` extensions Rojo expects (or keep verde’s `.lua` / `.local.lua` / `.module.lua` and document the mapping).
-- Generate a basic `default.project.json` that mirrors the extracted hierarchy under `Workspace`, `ServerScriptService`, etc.
-- Optional flag to also emit a `.gitignore` and a minimal README.
-- Keep this as an *export* only; do not change the primary extract/build format.
-
----
-
-## 5. Plugin: persist last search filters
-
-**Description**  
-Remember the most recent ClassName / Name / Tag / Property filters in the Studio plugin so users do not have to re-type them every session.
-
-**Recommendations & options**
-- Store the last values in `plugin:SetSetting` / `plugin:GetSetting` (Studio’s built-in plugin settings API).
-- On panel open, pre-fill the TextBoxes from the saved settings.
-- Add a small “Clear filters” button that also clears the persisted values.
-- Optionally persist the last dump/restore options (dry-run, recreate-missing, etc.) the same way.
-
----
-
-## 6. Live `.rbxlx` diff / patch
-
-**Description**  
-Produce a human-readable or machine-readable diff between two `.rbxlx` files (or an extracted tree and a `.rbxlx`) focusing on instance hierarchy, script sources, tags, and interesting properties.
-
-**Recommendations & options**
-- Build on the existing structural comparison already present in `test_roundtrip.py`.
-- CLI: `verde-diff a.rbxlx b.rbxlx` or `verde-diff extracted/ place.rbxlx`.
-- Output formats: plain text summary, unified-diff style for script sources, optional JSON for tooling.
-- Useful both for debugging round-trips and for reviewing changes before a rebuild.
-
----
-
-## 7. Selective extract / partial rebuild
+### 4. Selective extract / partial rebuild
 
 **Description**  
 Extract or rebuild only a subtree (e.g. everything under `ServerScriptService` or a single tagged model) instead of the whole place.
@@ -102,52 +62,7 @@ Extract or rebuild only a subtree (e.g. everything under `ServerScriptService` o
 
 ---
 
-## 8. Attributes as first-class citizens
-
-**Description**  
-Treat Instance Attributes the same way Tags are treated today: extract them into `.robloxmeta.json`, support search/filter by attribute name/value, and round-trip them losslessly.
-
-**Status**  
-Foundation complete:
-- `python/attributes.py` — full decode/encode for the AttributesSerialize binary format.
-- `extract.py` parses `AttributesSerialize` into top-level `meta["Attributes"]`.
-- `build.py` re-emits a correct `AttributesSerialize` BinaryString when `meta["Attributes"]` is present.
-- Unit tests in `python/tests/test_attributes.py`.
-
-Still open:
-- Extend `matches` / search CLI with `--attr Name` and `--attr-value …`.
-- In the Luau module, add thin wrappers around `GetAttribute` / `SetAttribute` that mirror the existing tag helpers.
-- Keep Attributes out of the “interesting properties” list unless explicitly requested.
-
----
-
-## 9. Touched-file tracking + offline merge (CLI: `verde-merge`)
-
-**Description**  
-Track which files in an extracted Verde tree have changed (simple numeric content hash + mtime) so that export/import can skip unchanged work and so **`verde-merge`** can keep the folder and a `.rbxlx` in agreement offline.
-
-**Conflict rule (today)**  
-Most recently modified side wins (mtime-win).
-
-**Future improvement**  
-Replace pure mtime-win with **git-merge-style conflict resolution** when both sides changed the same logical content (manual or 3-way merge), instead of silently picking one mtime.
-
-**Hash**  
-`zlib.adler32` — stable integer for change detection.
-
-**Status**  
-Foundation complete:
-- `python/features/sync.py` — manifest helpers + **`verde-merge`** CLI.
-- `extract.py` writes `.verde/manifest.json` after export.
-- `build.py` / `verde-import` skips clean files via the manifest.
-
-Still open:
-- Selective pull once #7 lands.
-- Git-merge-style conflicts for `verde-merge`.
-
----
-
-## 10. Live Sync with open Studio (CLI: `verde-sync`)
+### 5. Live Sync with open Studio (CLI: `verde-sync`)
 
 **Description**  
 Bi-directional event-driven sync between an extracted folder and an **open** Studio place (scripts-first).
@@ -164,7 +79,7 @@ Bi-directional event-driven sync between an extracted folder and an **open** Stu
 - [ ] Manual Referent / path edge cases (renames, `Name_2` collisions, missing Referent)
 - [ ] Plugin install path for non-coders (beyond paste ModuleScript)
 - [ ] Manual matrix + optional HTTP smoke tests
-- [ ] `verde-merge` design note / implementation for git-merge-style conflicts (see §9)
+- [ ] `verde-merge` design note / implementation for git-merge-style conflicts (see remaining merge work under PENDING)
 
 **Explicit non-goals (for now):**
 - Watching every Part / full DataModel property fan-out
@@ -173,7 +88,7 @@ Bi-directional event-driven sync between an extracted folder and an **open** Stu
 
 ---
 
-## 11. Interactive disambiguation for case-insensitive search matches
+### 6. Interactive disambiguation for case-insensitive search matches
 
 **Description**  
 When a case-insensitive search (e.g. `propContains` / nameContains / tag filters) yields multiple distinct values that differ only by case, prompt the user to choose which match(es) to act on instead of silently applying a case-insensitive equality or forcing one. Case sensitivity for properties and tags remains intentional and important.
@@ -186,6 +101,48 @@ Per HUMAN OPERATOR guidance: case matters for properties and tags. The previous 
 - Keep non-interactive / scripted paths exact-case by default.
 - Do not change the existing exact-match final check in `Verde.replaceProp` or Python `only_if_old`.
 - Document the behaviour clearly so users understand that case-insensitive filters are for discovery only.
+
+---
+
+### 7. Plugin: persist last search filters
+
+**Description**  
+Remember the most recent ClassName / Name / Tag / Property filters in the Studio plugin so users do not have to re-type them every session.
+
+**Recommendations & options**
+- Store the last values in `plugin:SetSetting` / `plugin:GetSetting` (Studio’s built-in plugin settings API).
+- On panel open, pre-fill the TextBoxes from the saved settings.
+- Add a small “Clear filters” button that also clears the persisted values.
+- Optionally persist the last dump/restore options (dry-run, recreate-missing, etc.) the same way.
+
+---
+
+### 8. Plugin hierarchy navigator + recent-sync timeline
+
+**Description**  
+Artists and designers currently context-switch between the extracted folder on disk and the Studio DataModel. A lightweight, scripts-first hierarchy view inside the existing Verde plugin panel, plus a short list of the most recent bridge events, would make Live Sync feel trustworthy and reduce the need to leave Studio to confirm what just happened.
+
+**Scope / Rough idea**  
+- On Live Sync connect the bridge already builds a UniqueId/Referent map for the watch scope; expose a compact hierarchy summary (or let the plugin walk the map).
+- Render a collapsible or filterable list/tree of scripts (and optionally tagged containers) inside the dockable panel.
+- Clicking an entry selects the instance in Studio and shows last-sync direction / status.
+- Below the tree, keep a rolling “Recent changes” list (path, Studio→disk or disk→Studio, timestamp) fed by the same bridge events that already drive Source updates.
+- Stay strictly within existing non-goals: no full DataModel mirror, no auto-create/delete, scripts-first by default. Re-use or lightly extend the existing HTTP endpoints; avoid new long-lived state on the Python side.
+
+---
+
+### 9. `verde-status` CLI for manifest dirtiness and bridge health
+
+**Description**  
+There is currently no single, zero-risk command that answers “which files are dirty?” or “is the Live Sync bridge reachable?”. Artists and power users both benefit from an instant, read-only status check.
+
+**Scope**  
+- New entry point `verde-status [extracted/]` (default: current directory or the path last used by sync).
+- Report clean / dirty / missing files from `.verde/manifest.json` (optionally with hash and mtime).
+- Optionally probe `localhost:3847` and report whether the bridge is up plus any last-activity hint the bridge already exposes.
+- Purely read-only; re-uses helpers already present in `features/sync.py` and `features/bridge.py`.
+- Human-readable default; honour a `--json` flag for machine consumption (aligns with pending JSON output work).
+- Document in the main README and SYSTEM_OVERVIEW; no new dependencies or configuration surface.
 
 ---
 
@@ -206,18 +163,6 @@ On Live Sync connect (and optionally on a lightweight periodic or on-demand “H
 - Surface a short human summary (“healed 7, ambiguous 2, left alone 3”) and never auto-delete or invent instances.
 - Keep the existing non-goals (no create/delete from disk) intact; this is only map + meta repair.
 
-### I2. Plugin hierarchy navigator + recent-sync timeline
-
-**Why**  
-Artists and designers currently context-switch between the extracted folder on disk and the Studio DataModel. A lightweight, scripts-first hierarchy view inside the existing Verde plugin panel, plus a short list of the most recent bridge events, would make Live Sync feel trustworthy and reduce the need to leave Studio to confirm what just happened.
-
-**Rough idea**  
-- On Live Sync connect the bridge already builds a UniqueId/Referent map for the watch scope; expose a compact hierarchy summary (or let the plugin walk the map).
-- Render a collapsible or filterable list/tree of scripts (and optionally tagged containers) inside the dockable panel.
-- Clicking an entry selects the instance in Studio and shows last-sync direction / status.
-- Below the tree, keep a rolling “Recent changes” list (path, Studio→disk or disk→Studio, timestamp) fed by the same bridge events that already drive Source updates.
-- Stay strictly within existing non-goals: no full DataModel mirror, no auto-create/delete, scripts-first by default. Re-use or lightly extend the existing HTTP endpoints; avoid new long-lived state on the Python side.
-
 ### SIMPLISTIC
 
 ### S1. Machine-readable `--json` output for `verde-search`, `verde-tags`, and `verde-set`/`verde-replace`
@@ -232,19 +177,74 @@ The current human-oriented text output is fine for interactive use but awkward f
 - Minimal surface: only the print/format paths in `features/search.py`, `features/tags.py`, and `features/set_replace.py`; no new dependencies.
 - Document the schema briefly in `--help` and SYSTEM_OVERVIEW.
 
-### S2. `verde-status` CLI for manifest dirtiness and bridge health
+---
 
-**Why**  
-There is currently no single, zero-risk command that answers “which files are dirty?” or “is the Live Sync bridge reachable?”. Artists and power users both benefit from an instant, read-only status check.
+### Other (demoted from prior APPROVED)
 
-**Scope**  
-- New entry point `verde-status [extracted/]` (default: current directory or the path last used by sync).
-- Report clean / dirty / missing files from `.verde/manifest.json` (optionally with hash and mtime).
-- Optionally probe `localhost:3847` and report whether the bridge is up plus any last-activity hint the bridge already exposes.
-- Purely read-only; re-uses helpers already present in `features/sync.py` and `features/bridge.py`.
-- Human-readable default; honour a `--json` flag for machine consumption (aligns with pending S1).
-- Document in the main README and SYSTEM_OVERVIEW; no new dependencies or configuration surface.
+#### Optional Rojo-compatible project layout export
+
+**Description**  
+Emit a folder structure and `default.project.json` that Rojo (or Argon / similar) can consume directly, so teams can move between verde’s lightweight workflow and a full Rojo pipeline.
+
+**Recommendations & options**
+- New command: `verde-export-rojo extracted/ --out rojo-project/`.
+- Map scripts to the conventional `.server.lua` / `.client.lua` / `.lua` extensions Rojo expects (or keep verde’s `.lua` / `.local.lua` / `.module.lua` and document the mapping).
+- Generate a basic `default.project.json` that mirrors the extracted hierarchy under `Workspace`, `ServerScriptService`, etc.
+- Optional flag to also emit a `.gitignore` and a minimal README.
+- Keep this as an *export* only; do not change the primary extract/build format.
+
+#### Live `.rbxlx` diff / patch
+
+**Description**  
+Produce a human-readable or machine-readable diff between two `.rbxlx` files (or an extracted tree and a `.rbxlx`) focusing on instance hierarchy, script sources, tags, and interesting properties.
+
+**Recommendations & options**
+- Build on the existing structural comparison already present in `test_roundtrip.py`.
+- CLI: `verde-diff a.rbxlx b.rbxlx` or `verde-diff extracted/ place.rbxlx`.
+- Output formats: plain text summary, unified-diff style for script sources, optional JSON for tooling.
+- Useful both for debugging round-trips and for reviewing changes before a rebuild.
+
+#### Attributes as first-class citizens (remaining work)
+
+**Description**  
+Treat Instance Attributes the same way Tags are treated today: extract them into `.robloxmeta.json`, support search/filter by attribute name/value, and round-trip them losslessly.
+
+**Status**  
+Foundation complete:
+- `python/attributes.py` — full decode/encode for the AttributesSerialize binary format.
+- `extract.py` parses `AttributesSerialize` into top-level `meta["Attributes"]`.
+- `build.py` re-emits a correct `AttributesSerialize` BinaryString when `meta["Attributes"]` is present.
+- Unit tests in `python/tests/test_attributes.py`.
+
+Still open:
+- Extend `matches` / search CLI with `--attr Name` and `--attr-value …`.
+- In the Luau module, add thin wrappers around `GetAttribute` / `SetAttribute` that mirror the existing tag helpers.
+- Keep Attributes out of the “interesting properties” list unless explicitly requested.
+
+#### Touched-file tracking + offline merge (CLI: `verde-merge`) — remaining work
+
+**Description**  
+Track which files in an extracted Verde tree have changed (simple numeric content hash + mtime) so that export/import can skip unchanged work and so **`verde-merge`** can keep the folder and a `.rbxlx` in agreement offline.
+
+**Conflict rule (today)**  
+Most recently modified side wins (mtime-win).
+
+**Future improvement**  
+Replace pure mtime-win with **git-merge-style conflict resolution** when both sides changed the same logical content (manual or 3-way merge), instead of silently picking one mtime.
+
+**Hash**  
+`zlib.adler32` — stable integer for change detection.
+
+**Status**  
+Foundation complete:
+- `python/features/sync.py` — manifest helpers + **`verde-merge`** CLI.
+- `extract.py` writes `.verde/manifest.json` after export.
+- `build.py` / `verde-import` skips clean files via the manifest.
+
+Still open:
+- Selective pull once selective extract lands.
+- Git-merge-style conflicts for `verde-merge`.
 
 ---
 
-*Prioritise items 1–3 for correctness and large-place usability. Items 4–5 improve workflow integration. Items 6–10 extend iterative and live workflows. Item 11 addresses operator feedback on case sensitivity. New PENDING items (I1–I2, S1–S2) await approval before Build.*
+*APPROVED items are eligible for the Build skill. PENDING items (including demoted work) await further approval. Implementation order in APPROVED prioritises round-trip correctness and large-place foundations, then Live Sync readiness, then plugin/CLI polish.*
