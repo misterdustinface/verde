@@ -169,4 +169,20 @@ Bi-directional event-driven sync between an extracted folder and an **open** Stu
 
 ---
 
-*Prioritise items 1–3 for correctness and large-place usability. Items 4–5 improve workflow integration. Items 6–10 extend iterative and live workflows.*
+## 11. Interactive disambiguation for case-insensitive search matches
+
+**Description**  
+When a case-insensitive search (e.g. `propContains` / nameContains / tag filters) yields multiple distinct values that differ only by case, prompt the user to choose which match(es) to act on instead of silently applying a case-insensitive equality or forcing one. Case sensitivity for properties and tags remains intentional and important.
+
+**Why**  
+Per HUMAN OPERATOR guidance: case matters for properties and tags. The previous approach of making `replaceProp` fully case-insensitive was rejected. Search can still be helpful case-insensitively for discovery, but the final selection / replace must respect exact case and offer explicit choice when ambiguity exists.
+
+**Rough idea / Scope**
+- In the Studio plugin UI and (optionally) CLI interactive mode, when the candidate set contains multiple values that collide under case-folding, present a short list (original-cased values + instance counts / paths) and let the user pick one or more before proceeding with set/replace.
+- Keep non-interactive / scripted paths exact-case by default.
+- Do not change the existing exact-match final check in `Verde.replaceProp` or Python `only_if_old`.
+- Document the behaviour clearly so users understand that case-insensitive filters are for discovery only.
+
+---
+
+*Prioritise items 1–3 for correctness and large-place usability. Items 4–5 improve workflow integration. Items 6–10 extend iterative and live workflows. Item 11 addresses operator feedback on case sensitivity.*
