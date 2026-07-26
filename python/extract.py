@@ -21,6 +21,7 @@ search, and edit.
     differing files are overwritten by default, or prompted with --interactive.
 - After a successful export a .verde/manifest.json is written so later merge/import
   can skip unchanged files (simple adler32 hash + mtime).
+- Selective: --root PATH and/or --tag TAG limit the exported tree.
 """
 
 from __future__ import annotations
@@ -194,7 +195,36 @@ def _resolve_name(
     return "Unnamed"
 
 
-def _compute_keep_map(items: list[ET.Element]) -> dict[int, bool]:
+def _item_has_tag(item: ET.Element, tag: str) -> bool:
+    """Quick check without full property parse — Tags BinaryString or string."""
+    props = item.find("Properties")
+    if props is None:
+        return False
+    tag_lower = tag.lower()
+    for prop in props:
+        if prop.get("name") != "Tags":
+            continue
+        if prop.tag == "BinaryString":
+            raw = (prop.text or "").replace("\n", "").replace(" ", "")
+            try:
+                data = base64.b64decode(raw)
+                tags = [t.decode("utf-8", errors="replace") for t in data.split(b"\0") if t]
+            except Exception:
+                tags = []
+            return any(t.lower() == tag_lower for t in tags)
+        text = prop.text or ""
+        tags = [t.strip() for t in text.replace("\0", ",").split(",") if t.strip()]
+        return any(t.lower() == tag_lower for t in tags)
+    return False
+
+
+def _compute_keep_map(
+    items: list[ET.Element],
+    *,
+    scripts_only: bool = True,
+    tag_filter: str | None = None,
+) -> dict[int, bool]:
+    """Bottom-up keep: scripts and/or tagged instances, plus their ancestors."""
     keep: dict[int, bool] = {}
     stack: list[tuple[ET.Element, bool]] = []
     for it in items:
@@ -217,9 +247,45 @@ def _compute_keep_map(items: list[ET.Element]) -> dict[int, bool]:
         has_kept_child = any(
             keep.get(id(c), False) for c in item if c.tag == "Item"
         )
-        keep[id(item)] = is_script or has_kept_child
+        has_tag = bool(tag_filter) and _item_has_tag(item, tag_filter)
+
+        if scripts_only and tag_filter:
+            # Keep if script path or tagged (or ancestor of either)
+            keep[id(item)] = is_script or has_tag or has_kept_child
+        elif tag_filter:
+            keep[id(item)] = has_tag or has_kept_child
+        else:
+            # scripts_only default
+            keep[id(item)] = is_script or has_kept_child
 
     return keep
+
+
+def _find_root_item(root: ET.Element, path: str) -> ET.Element | None:
+    """Locate an Item by dot-separated Name path from top-level Items."""
+    parts = [p for p in path.split(".") if p]
+    if not parts:
+        return None
+
+    current_list = [c for c in root if c.tag == "Item"]
+    target: ET.Element | None = None
+
+    for i, part in enumerate(parts):
+        found = None
+        for it in current_list:
+            # Resolve name the same way as export
+            flat, _, full, _ = extract_properties(it, set())
+            name = _resolve_name(it, flat, full)
+            if name == part or sanitize_name(name) == part:
+                found = it
+                break
+        if found is None:
+            return None
+        target = found
+        if i < len(parts) - 1:
+            current_list = [c for c in found if c.tag == "Item"]
+
+    return target
 
 
 def _prune_empty_dirs(root: Path) -> int:
@@ -284,6 +350,8 @@ def extract(
     interesting: set[str] | None = None,
     scripts_only: bool = True,
     interactive: bool = False,
+    root_filter: str | None = None,
+    tag_filter: str | None = None,
 ) -> None:
     if interesting is None:
         interesting = load_interesting_props()
@@ -302,15 +370,32 @@ def extract(
     skipped_count = 0
     PROGRESS_EVERY = 500
 
+    # Selective root: start from a single Item instead of all top-level Items
+    start_items: list[ET.Element]
+    if root_filter:
+        found = _find_root_item(root, root_filter)
+        if found is None:
+            print(f"Error: --root {root_filter!r} not found in place", file=sys.stderr)
+            sys.exit(1)
+        start_items = [found]
+        print(f"  Selective root: {root_filter}")
+    else:
+        start_items = [c for c in root if c.tag == "Item"]
+
     keep_map: dict[int, bool] | None = None
-    if scripts_only:
-        top_items = [c for c in root if c.tag == "Item"]
-        keep_map = _compute_keep_map(top_items)
+    if scripts_only or tag_filter:
+        keep_map = _compute_keep_map(
+            start_items if root_filter else [c for c in root if c.tag == "Item"],
+            scripts_only=scripts_only,
+            tag_filter=tag_filter,
+        )
+        if tag_filter:
+            print(f"  Selective tag: {tag_filter}")
 
     used_names: dict[Path, set[str]] = {}
 
     stack: list[tuple[ET.Element, Path]] = []
-    for top in reversed(list(root.findall("Item"))):
+    for top in reversed(start_items):
         stack.append((top, out))
 
     while stack:
@@ -424,10 +509,16 @@ def extract(
 
     pruned = _prune_empty_dirs(out)
 
+    mode_bits = []
     if scripts_only:
-        print(f"Export complete → {out}/  (scripts-only)")
+        mode_bits.append("scripts-only")
     else:
-        print(f"Export complete → {out}/  (--all)")
+        mode_bits.append("--all")
+    if root_filter:
+        mode_bits.append(f"root={root_filter}")
+    if tag_filter:
+        mode_bits.append(f"tag={tag_filter}")
+    print(f"Export complete → {out}/  ({', '.join(mode_bits)})")
     print(f"  Instances : {instance_count}")
     print(f"  Scripts   : {script_count}")
     print(f"  Wrote     : {written_count}")
@@ -437,6 +528,21 @@ def extract(
         print(f"  Skipped   : {skipped_count} (interactive)")
     if pruned:
         print(f"  Empty dirs removed: {pruned}")
+
+    # Record selective filters for future import grafting
+    if root_filter or tag_filter:
+        partial = {
+            "root": root_filter,
+            "tag": tag_filter,
+            "scripts_only": scripts_only,
+            "source_rbxlx": str(Path(rbxlx_path).resolve()),
+        }
+        partial_dir = out / ".verde"
+        partial_dir.mkdir(parents=True, exist_ok=True)
+        (partial_dir / "partial.json").write_text(
+            json.dumps(partial, indent=2), encoding="utf-8"
+        )
+        print(f"  Partial   : {partial_dir / 'partial.json'}")
 
     # Touched-file tracking for later import / verde-merge (mtime-win).
     try:
@@ -452,7 +558,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Export a Roblox .rbxlx into a searchable/editable folder tree (CLI: verde-export). "
-            "Existing paths are reused; files are overwritten only when content differs."
+            "Existing paths are reused; files are overwritten only when content differs. "
+            "Use --root / --tag for selective (partial) exports."
         )
     )
     parser.add_argument("rbxlx", help="Path to .rbxlx file")
@@ -479,6 +586,23 @@ def main() -> None:
             "overwriting (default is to overwrite on diff, skip when identical)."
         ),
     )
+    parser.add_argument(
+        "--root",
+        metavar="PATH",
+        help=(
+            "Selective: start export from this instance path (dot-separated Names, "
+            "e.g. ServerScriptService or Workspace.MyModel). The subtree becomes "
+            "the top of the output folder."
+        ),
+    )
+    parser.add_argument(
+        "--tag",
+        metavar="TAG",
+        help=(
+            "Selective: keep only instances that have this CollectionService tag "
+            "(or ancestors of tagged instances) so hierarchy is preserved."
+        ),
+    )
     args = parser.parse_args()
 
     interesting = None
@@ -491,6 +615,8 @@ def main() -> None:
         interesting=interesting,
         scripts_only=not args.all,
         interactive=args.interactive,
+        root_filter=args.root,
+        tag_filter=args.tag,
     )
 
 
