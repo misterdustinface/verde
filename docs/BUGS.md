@@ -102,7 +102,8 @@ These correctness problems were fixed during development and are no longer prese
 4. Duplicate `<Tags>` elements no longer appear on rebuild.
 5. `set_prop_value` refuses non-scalar properties that contain a `"children"` dict.
 6. Extract prefers the `Name` property over a missing `Item@name` attribute (real Studio .rbxlx format).
-7. `build.add_properties` only suppresses Tags from the full Properties map when `meta["Tags"]` is non-empty (previously any leftover SharedString hash was dropped).
+7. `Verde.restoreScripts` now clears existing tags via `CollectionService:GetTags` + `RemoveTag` before applying the archived tag set (previously merged).
+8. `build.add_properties` only suppresses Tags from the full Properties map when `meta["Tags"]` is non-empty (previously any leftover SharedString hash was dropped).
 
 ---
 
