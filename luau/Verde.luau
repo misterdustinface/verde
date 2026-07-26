@@ -651,7 +651,7 @@ local function decodeValue(encoded: any): any
 		local kps = {}
 		for _, kp in (encoded.Keypoints or {}) do
 			local v = kp.Value or {}
-			table insert(kps, ColorSequenceKeypoint.new(kp.Time or 0, Color3.new(v.R or 0, v.G or 0, v.B or 0)))
+			table.insert(kps, ColorSequenceKeypoint.new(kp.Time or 0, Color3.new(v.R or 0, v.G or 0, v.B or 0)))
 		end
 		if #kps >= 2 then return ColorSequence.new(kps) end
 	elseif ty == "NumberSequence" then
