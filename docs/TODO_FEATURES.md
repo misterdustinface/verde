@@ -1,9 +1,13 @@
-# Future Features
+# TODO_FEATURES.md — Verde
 
-Planned and aspirational features for verde.  
-Each entry includes a short description plus concrete implementation options.
+Future features and intentional enhancements.  
+Pure defects remain in `BUGS.md`.
 
 ---
+
+## APPROVED
+
+*(Existing numbered items below are treated as the current planned set; formal priority sections can be refined later. New work from Inspire lands only under PENDING APPROVAL.)*
 
 ## 1. Streaming search / replace on live `.rbxlx`
 
@@ -185,4 +189,37 @@ Per HUMAN OPERATOR guidance: case matters for properties and tags. The previous 
 
 ---
 
-*Prioritise items 1–3 for correctness and large-place usability. Items 4–5 improve workflow integration. Items 6–10 extend iterative and live workflows. Item 11 addresses operator feedback on case sensitivity.*
+## PENDING APPROVAL
+
+### IMAGINEERED
+
+### I1. Referent / UniqueId healing and rename reconciliation for Live Sync
+
+**Why**  
+Live Sync and offline merge already prefer Referent/UniqueId, but renames, `Name_2` collisions, deleted-then-recreated scripts, or meta that lags Studio can leave the UniqueId map and `.robloxmeta.json` files drifting. Large places then accumulate “N file(s) had no matching script” noise and silent path fallbacks. Healing would make the system self-repairing across sessions without requiring a full re-export.
+
+**Rough idea**  
+On Live Sync connect (and optionally on a lightweight periodic or on-demand “Heal” action in the plugin):
+- Build the current Studio UniqueId/Referent map for the watch scope (scripts-only by default).
+- Walk the extracted tree’s `.robloxmeta.json` files and match by path → Referent → fuzzy Name+ClassName.
+- For high-confidence mismatches, rewrite the meta file’s Referent/UniqueId (and optionally the on-disk path if a clean rename is detected) so future syncs stay Referent-first.
+- Surface a short human summary (“healed 7, ambiguous 2, left alone 3”) and never auto-delete or invent instances.
+- Keep the existing non-goals (no create/delete from disk) intact; this is only map + meta repair.
+
+### SIMPLISTIC
+
+### S1. Machine-readable `--json` output for `verde-search`, `verde-tags`, and `verde-set`/`verde-replace`
+
+**Why**  
+The current human-oriented text output is fine for interactive use but awkward for CI, external scripts, or editor integrations. A stable JSON shape lets other tools consume matches without fragile parsing.
+
+**Scope**  
+- Add an optional `--json` flag to the three CLI entry points.
+- When set, emit a single JSON array (or object) of results instead of pretty-printed lines: path, ClassName, Name, Referent, matched property/tag, and relevant values.
+- Keep the default human output unchanged.
+- Minimal surface: only the print/format paths in `features/search.py`, `features/tags.py`, and `features/set_replace.py`; no new dependencies.
+- Document the schema briefly in `--help` and SYSTEM_OVERVIEW.
+
+---
+
+*Prioritise items 1–3 for correctness and large-place usability. Items 4–5 improve workflow integration. Items 6–10 extend iterative and live workflows. Item 11 addresses operator feedback on case sensitivity. New PENDING items (I1, S1) await approval before Build.*
