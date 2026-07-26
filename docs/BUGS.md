@@ -9,16 +9,7 @@ Missing features and intentional design choices live in `TODO_FEATURES.md`.
 
 ## Open issues
 
-### 1. Restore does not clear existing tags
-
-`Verde.restoreScripts` currently *adds* the archived tags (from the `Tags` attribute) without first removing any tags already present on the target. Restore therefore merges rather than replaces the tag set.
-
-PR #6 (`fix/restore-clear-tags`) implements the clear-before-add when a `Tags` attribute is present. Residual even after that lands: the Luau dump path only sets the `Tags` attribute when `#tags > 0`. When the original script had zero tags the attribute is absent, so restore still never clears. Full fidelity for “no tags” requires either always emitting `Tags=""` on dump or clearing when the attribute is absent.
-
-**Impact**  
-Correctness / data fidelity on restore.
-
-### 2. Live Sync bridge: Studio→folder push leaves files dirty vs on-disk manifest
+### 1. Live Sync bridge: Studio→folder push leaves files dirty vs on-disk manifest
 
 In `features/bridge.py`, `write_file` (Studio push) updates only the in-memory `self.known` map and discards from `pending_to_studio`. It does **not** update `self.manifest` or call `write_manifest`. The watcher and `/dirty` / `/full-sync` paths call `refresh_dirty` → `dirty_paths(self.root, self.manifest)`, which still compares against the stale on-disk manifest.
 
@@ -29,7 +20,7 @@ Consequence: a just-pushed file can immediately look dirty again, re-enter `pend
 **Impact**  
 Robustness / correctness of Live Sync; wasted work and possible brief echo loops.
 
-### 3. `applyMeta` leaves stale Attributes
+### 2. `applyMeta` leaves stale Attributes
 
 `Verde.applyMeta` correctly replaces the tag set (remove extras + add missing). For Attributes it only *sets* keys present in `meta.Attributes`; it never removes attributes that exist on the target Instance but are absent from the meta table. Live Sync experimental property path and any full meta apply therefore leave stale attributes behind.
 
@@ -38,7 +29,7 @@ Inconsistent with the Tags handling in the same function and with the offline Py
 **Impact**  
 Data fidelity on Live Sync (experimental) and any `applyMeta` / `applyFromBridge` callers.
 
-### 4. Case-insensitive extract uniqueness vs case-sensitive import path maps
+### 3. Case-insensitive extract uniqueness vs case-sensitive import path maps
 
 On Darwin/Windows, `extract.py` uniquifies sibling Names with `name.casefold()` so `Foo` / `foo` become `Foo` + `foo_2` on disk. `build.py` `_build_instance_maps` builds the path map with a case-sensitive `used` set. Differential import therefore cannot match the on-disk `foo_2` path for the original case-sibling and silently skips the update.
 
@@ -47,7 +38,7 @@ Rare (requires two siblings that differ only by case under the same parent) but 
 **Impact**  
 Correctness / silent data skip on import (Darwin/Windows).
 
-### 5. Luau dump/restore corrupts tags that contain commas
+### 4. Luau dump/restore corrupts tags that contain commas
 
 `Verde.dumpScripts` stores tags via `table.concat(tags, ",")` into a string attribute. Restore splits on `","`. Any CollectionService tag that itself contains a comma is truncated or split into multiple tags.
 
@@ -102,7 +93,7 @@ These correctness problems were fixed during development and are no longer prese
 4. Duplicate `<Tags>` elements no longer appear on rebuild.
 5. `set_prop_value` refuses non-scalar properties that contain a `"children"` dict.
 6. Extract prefers the `Name` property over a missing `Item@name` attribute (real Studio .rbxlx format).
-7. `Verde.restoreScripts` now clears existing tags via `CollectionService:GetTags` + `RemoveTag` before applying the archived tag set (previously merged).
+7. `Verde.restoreScripts` now always clears existing tags via `CollectionService:GetTags` + `RemoveTag` before applying the archived tag set (including when dump omitted the Tags attribute because the original had zero tags).
 8. `build.add_properties` only suppresses Tags from the full Properties map when `meta["Tags"]` is non-empty (previously any leftover SharedString hash was dropped).
 
 ---
