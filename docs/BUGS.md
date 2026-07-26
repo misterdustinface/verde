@@ -28,6 +28,7 @@ Focus is on extract/import round-trips, Luau live operations, and shared helpers
 - **Scripts-only default** (export): only directories that lead to scripts are written; empty directories are always pruned (both modes). Use `--all` for the full hierarchy. This is intentional and documented in the README / extract docstring.
 - **Attributes**: full binary round-trip for AttributesSerialize is supported; search/filter by attribute and Luau wrappers remain open (see TODO #8).
 - **Orphaned uniquified paths**: if a previous export created `Name_2` because of a sibling collision that no longer exists, a later re-export will write to `Name` and leave the old `Name_2` on disk. Empty-dir prune does not remove non-empty leftovers.
+- **Case-insensitive search + exact replaceProp** (Luau): `Verde.search` treats `propContains` case-insensitively while `Verde.replaceProp` keeps an exact `tostring(current) == oldValue` final check. This is intentional (case sensitivity matters for properties and tags). When multiple case-insensitive matches exist, interactive disambiguation / prompting is a planned feature (see TODO_FEATURES).
 
 ---
 
@@ -41,9 +42,7 @@ These correctness problems were fixed during development and are no longer prese
 4. Duplicate `<Tags>` elements no longer appear on rebuild.
 5. `set_prop_value` refuses non-scalar properties that contain a `"children"` dict.
 6. Extract prefers the `Name` property over a missing `Item@name` attribute (real Studio .rbxlx format).
-7. `replaceProp` candidate selection vs final check mismatch (Luau) — FIXED
-   The final equality check in `Verde.replaceProp` is now case-insensitive (`lower(tostring(current)) == lower(oldValue)`), consistent with `Verde.search` and the Python CLI.
 
 ---
 
-*Open items are the restore tag replacement behaviour, and the intentional Python/Luau tag case divergence. Everything else listed above is resolved in the current tree.*
+*Open items are the restore tag replacement behaviour, and the intentional Python/Luau tag case divergence. The case-sensitivity behaviour of search vs replaceProp is intentional; interactive prompting for ambiguous matches is tracked as a feature request.*
