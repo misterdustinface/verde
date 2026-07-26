@@ -7,15 +7,11 @@ Focus is on extract/import round-trips, Luau live operations, and shared helpers
 
 ## Open issues
 
-### 1. `replaceProp` candidate selection vs final check mismatch (Luau)
-
-`Verde.search` (used to collect candidates) treats `propContains` case-insensitively. The final equality check in `Verde.replaceProp` remains exact (`tostring(current) == oldValue`). Consequently a value that matches the contains filter only by case will be selected but not replaced. Aligning the final check to `lower(tostring(current)) == lower(oldValue)` would make behaviour consistent with search and with the Python CLI’s string comparison.
-
-### 2. Restore does not clear existing tags
+### 1. Restore does not clear existing tags
 
 `Verde.restoreScripts` currently *adds* the archived tags (from the `Tags` attribute) without first removing any tags already present on the target. Restore therefore merges rather than replaces the tag set. Clearing via `CollectionService:GetTags` + `RemoveTag` before adding the archived set would make restore replace, matching the documented intent and the Python-side tag handling philosophy.
 
-### 3. Tag matching is case-inconsistent (Python vs Luau)
+### 2. Tag matching is case-inconsistent (Python vs Luau)
 
 - **Python** `verde-tags --replace` and search filters perform case-insensitive matching (consistent with the rest of the CLI). The original-cased tag is removed and the new tag is added.
 - **Luau** `Verde.replaceTag` still uses `CollectionService:HasTag` / `RemoveTag` / `AddTag` with exact (case-sensitive) match. Roblox tags are case-sensitive, so this is intentional for live DataModel fidelity, but it diverges from the Python CLI’s case-insensitive behaviour.
@@ -45,7 +41,9 @@ These correctness problems were fixed during development and are no longer prese
 4. Duplicate `<Tags>` elements no longer appear on rebuild.
 5. `set_prop_value` refuses non-scalar properties that contain a `"children"` dict.
 6. Extract prefers the `Name` property over a missing `Item@name` attribute (real Studio .rbxlx format).
+7. `replaceProp` candidate selection vs final check mismatch (Luau) — FIXED
+   The final equality check in `Verde.replaceProp` is now case-insensitive (`lower(tostring(current)) == lower(oldValue)`), consistent with `Verde.search` and the Python CLI.
 
 ---
 
-*Open items are the Luau-side case-sensitivity mismatch for replaceProp, restore tag replacement behaviour, and the intentional Python/Luau tag case divergence. Everything else listed above is resolved in the current tree.*
+*Open items are the restore tag replacement behaviour, and the intentional Python/Luau tag case divergence. Everything else listed above is resolved in the current tree.*
