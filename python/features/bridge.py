@@ -107,6 +107,14 @@ class BridgeState:
             with self.lock:
                 self.known[rel] = {"h": content_hash(raw), "m": st.st_mtime}
                 self.pending_to_studio.discard(rel)
+            # Persist so subsequent dirty_paths / refresh_dirty see the new hash+mtime
+            # (mirrors mark_applied). Without this a Studio push immediately reappears
+            # as dirty and can produce event noise / brief echo loops.
+            try:
+                write_manifest(self.root, extra={"live_sync": True})
+                self.manifest = load_manifest(self.root) or self.manifest
+            except Exception:
+                pass
             return True
         except Exception as e:
             print(f"  ! failed to write {rel}: {e}")
