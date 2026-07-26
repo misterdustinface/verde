@@ -107,6 +107,11 @@ class BridgeState:
             with self.lock:
                 self.known[rel] = {"h": content_hash(raw), "m": st.st_mtime}
                 self.pending_to_studio.discard(rel)
+                try:
+                    write_manifest(self.root, extra={"live_sync": True})
+                    self.manifest = load_manifest(self.root) or self.manifest
+                except Exception:
+                    pass
             return True
         except Exception as e:
             print(f"  ! failed to write {rel}: {e}")
@@ -340,4 +345,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+        main()
