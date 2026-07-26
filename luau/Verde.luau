@@ -649,7 +649,7 @@ local function decodeValue(encoded: any): any
 	elseif ty == "NumberSequence" then
 		local kps = {}
 		for _, kp in (encoded.Keypoints or {}) do
-			table insert(kps, NumberSequenceKeypoint.new(kp.Time or 0, kp.Value or 0, kp.Envelope or 0))
+			table.insert(kps, NumberSequenceKeypoint.new(kp.Time or 0, kp.Value or 0, kp.Envelope or 0))
 		end
 		if #kps >= 2 then return NumberSequence.new(kps) end
 	end
