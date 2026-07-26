@@ -9,18 +9,7 @@ Missing features and intentional design choices live in `TODO_FEATURES.md`.
 
 ## Open issues
 
-### 1. Live Sync bridge: Studio→folder push leaves files dirty vs on-disk manifest
-
-In `features/bridge.py`, `write_file` (Studio push) updates only the in-memory `self.known` map and discards from `pending_to_studio`. It does **not** update `self.manifest` or call `write_manifest`. The watcher and `/dirty` / `/full-sync` paths call `refresh_dirty` → `dirty_paths(self.root, self.manifest)`, which still compares against the stale on-disk manifest.
-
-Consequence: a just-pushed file can immediately look dirty again, re-enter `pending_to_studio`, emit a dirty event, and cause Studio to re-apply its own change (usually a no-op via `valuesEqual`, but produces event noise, status flicker, and a race window if the user also edits the same file on disk).
-
-`mark_applied` (folder→Studio) does refresh the manifest; the Studio→folder direction does not.
-
-**Impact**  
-Robustness / correctness of Live Sync; wasted work and possible brief echo loops.
-
-### 2. Case-insensitive extract uniqueness vs case-sensitive import path maps
+### 1. Case-insensitive extract uniqueness vs case-sensitive import path maps
 
 On Darwin/Windows, `extract.py` uniquifies sibling Names with `name.casefold()` so `Foo` / `foo` become `Foo` + `foo_2` on disk. `build.py` `_build_instance_maps` builds the path map with a case-sensitive `used` set. Differential import therefore cannot match the on-disk `foo_2` path for the original case-sibling and silently skips the update.
 
@@ -29,7 +18,7 @@ Rare (requires two siblings that differ only by case under the same parent) but 
 **Impact**  
 Correctness / silent data skip on import (Darwin/Windows).
 
-### 3. Luau dump/restore corrupts tags that contain commas
+### 2. Luau dump/restore corrupts tags that contain commas
 
 `Verde.dumpScripts` stores tags via `table.concat(tags, ",")` into a string attribute. Restore splits on `","`. Any CollectionService tag that itself contains a comma is truncated or split into multiple tags.
 
@@ -69,7 +58,7 @@ These behaviours are deliberate and should not be “fixed” without an explici
 - **Plugin recording**: no user feedback when `ChangeHistoryService:TryBeginRecording` returns `nil` (playtest, concurrent recording, etc.).
 - **Orphaned uniquified paths**: if a previous export created `Name_2` because of a sibling collision that no longer exists, a later re-export will write to `Name` and leave the old `Name_2` on disk. Empty-dir prune does not remove non-empty leftovers.
 - **Tags as SharedString on extract**: extract only decodes Tags when the property type is BinaryString / string / ProtectedString. A SharedString Tags value stays in the full Properties map and `meta["Tags"]` remains empty (pass-through on rebuild). Edge format; not observed as common.
-- **Silent bridgePost errors in plugin**: `pushInstanceToBridge` does not surface `bridgePost` failures to the status line; a dead bridge loses Studio→folder edits until the next poll error. Lower priority than the dirty/echo issue above.
+- **Silent bridgePost errors in plugin**: `pushInstanceToBridge` does not surface `bridgePost` failures to the status line; a dead bridge loses Studio→folder edits until the next poll error.
 - **Attributes search/filter and Luau wrappers** remain open (see TODO_FEATURES); not defects in the existing binary round-trip.
 
 ---
@@ -87,6 +76,7 @@ These correctness problems were fixed during development and are no longer prese
 7. `Verde.restoreScripts` now always clears existing tags via `CollectionService:GetTags` + `RemoveTag` before applying the archived tag set (including when dump omitted the Tags attribute because the original had zero tags).
 8. `build.add_properties` only suppresses Tags from the full Properties map when `meta["Tags"]` is non-empty (previously any leftover SharedString hash was dropped).
 9. `Verde.applyMeta` now fully replaces the Attributes set (removes attributes present on the target but absent from `meta.Attributes`, then sets/updates the wanted ones) when the key is present as a table. Matches Tags handling in the same function and the offline Python path.
+10. Live Sync `BridgeState.write_file` (Studio→folder) now calls `write_manifest` and reloads `self.manifest` after updating the in-memory known map (mirrors `mark_applied`). Previously the on-disk manifest stayed stale, so a just-pushed file immediately looked dirty again and could produce echo noise / status flicker. Fixed in PR #8; docs update completed here.
 
 ---
 
