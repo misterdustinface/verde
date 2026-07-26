@@ -206,6 +206,18 @@ On Live Sync connect (and optionally on a lightweight periodic or on-demand “H
 - Surface a short human summary (“healed 7, ambiguous 2, left alone 3”) and never auto-delete or invent instances.
 - Keep the existing non-goals (no create/delete from disk) intact; this is only map + meta repair.
 
+### I2. Plugin hierarchy navigator + recent-sync timeline
+
+**Why**  
+Artists and designers currently context-switch between the extracted folder on disk and the Studio DataModel. A lightweight, scripts-first hierarchy view inside the existing Verde plugin panel, plus a short list of the most recent bridge events, would make Live Sync feel trustworthy and reduce the need to leave Studio to confirm what just happened.
+
+**Rough idea**  
+- On Live Sync connect the bridge already builds a UniqueId/Referent map for the watch scope; expose a compact hierarchy summary (or let the plugin walk the map).
+- Render a collapsible or filterable list/tree of scripts (and optionally tagged containers) inside the dockable panel.
+- Clicking an entry selects the instance in Studio and shows last-sync direction / status.
+- Below the tree, keep a rolling “Recent changes” list (path, Studio→disk or disk→Studio, timestamp) fed by the same bridge events that already drive Source updates.
+- Stay strictly within existing non-goals: no full DataModel mirror, no auto-create/delete, scripts-first by default. Re-use or lightly extend the existing HTTP endpoints; avoid new long-lived state on the Python side.
+
 ### SIMPLISTIC
 
 ### S1. Machine-readable `--json` output for `verde-search`, `verde-tags`, and `verde-set`/`verde-replace`
@@ -220,6 +232,19 @@ The current human-oriented text output is fine for interactive use but awkward f
 - Minimal surface: only the print/format paths in `features/search.py`, `features/tags.py`, and `features/set_replace.py`; no new dependencies.
 - Document the schema briefly in `--help` and SYSTEM_OVERVIEW.
 
+### S2. `verde-status` CLI for manifest dirtiness and bridge health
+
+**Why**  
+There is currently no single, zero-risk command that answers “which files are dirty?” or “is the Live Sync bridge reachable?”. Artists and power users both benefit from an instant, read-only status check.
+
+**Scope**  
+- New entry point `verde-status [extracted/]` (default: current directory or the path last used by sync).
+- Report clean / dirty / missing files from `.verde/manifest.json` (optionally with hash and mtime).
+- Optionally probe `localhost:3847` and report whether the bridge is up plus any last-activity hint the bridge already exposes.
+- Purely read-only; re-uses helpers already present in `features/sync.py` and `features/bridge.py`.
+- Human-readable default; honour a `--json` flag for machine consumption (aligns with pending S1).
+- Document in the main README and SYSTEM_OVERVIEW; no new dependencies or configuration surface.
+
 ---
 
-*Prioritise items 1–3 for correctness and large-place usability. Items 4–5 improve workflow integration. Items 6–10 extend iterative and live workflows. Item 11 addresses operator feedback on case sensitivity. New PENDING items (I1, S1) await approval before Build.*
+*Prioritise items 1–3 for correctness and large-place usability. Items 4–5 improve workflow integration. Items 6–10 extend iterative and live workflows. Item 11 addresses operator feedback on case sensitivity. New PENDING items (I1–I2, S1–S2) await approval before Build.*
