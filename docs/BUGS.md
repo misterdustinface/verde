@@ -20,16 +20,7 @@ Consequence: a just-pushed file can immediately look dirty again, re-enter `pend
 **Impact**  
 Robustness / correctness of Live Sync; wasted work and possible brief echo loops.
 
-### 2. `applyMeta` leaves stale Attributes
-
-`Verde.applyMeta` correctly replaces the tag set (remove extras + add missing). For Attributes it only *sets* keys present in `meta.Attributes`; it never removes attributes that exist on the target Instance but are absent from the meta table. Live Sync experimental property path and any full meta apply therefore leave stale attributes behind.
-
-Inconsistent with the Tags handling in the same function and with the offline Python import path (which clears and re-emits Properties/Attributes).
-
-**Impact**  
-Data fidelity on Live Sync (experimental) and any `applyMeta` / `applyFromBridge` callers.
-
-### 3. Case-insensitive extract uniqueness vs case-sensitive import path maps
+### 2. Case-insensitive extract uniqueness vs case-sensitive import path maps
 
 On Darwin/Windows, `extract.py` uniquifies sibling Names with `name.casefold()` so `Foo` / `foo` become `Foo` + `foo_2` on disk. `build.py` `_build_instance_maps` builds the path map with a case-sensitive `used` set. Differential import therefore cannot match the on-disk `foo_2` path for the original case-sibling and silently skips the update.
 
@@ -38,7 +29,7 @@ Rare (requires two siblings that differ only by case under the same parent) but 
 **Impact**  
 Correctness / silent data skip on import (Darwin/Windows).
 
-### 4. Luau dump/restore corrupts tags that contain commas
+### 3. Luau dump/restore corrupts tags that contain commas
 
 `Verde.dumpScripts` stores tags via `table.concat(tags, ",")` into a string attribute. Restore splits on `","`. Any CollectionService tag that itself contains a comma is truncated or split into multiple tags.
 
@@ -95,6 +86,7 @@ These correctness problems were fixed during development and are no longer prese
 6. Extract prefers the `Name` property over a missing `Item@name` attribute (real Studio .rbxlx format).
 7. `Verde.restoreScripts` now always clears existing tags via `CollectionService:GetTags` + `RemoveTag` before applying the archived tag set (including when dump omitted the Tags attribute because the original had zero tags).
 8. `build.add_properties` only suppresses Tags from the full Properties map when `meta["Tags"]` is non-empty (previously any leftover SharedString hash was dropped).
+9. `Verde.applyMeta` now fully replaces the Attributes set (removes attributes present on the target but absent from `meta.Attributes`, then sets/updates the wanted ones) when the key is present as a table. Matches Tags handling in the same function and the offline Python path.
 
 ---
 
