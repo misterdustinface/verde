@@ -9,12 +9,7 @@ Missing features and intentional design choices live in `TODO_FEATURES.md`.
 
 ## Open issues
 
-### 1. Restore does not clear existing tags
-
-`Verde.restoreScripts` currently *adds* the archived tags (from the `Tags` attribute) without first removing any tags already present on the target. Restore therefore merges rather than replaces the tag set. Clearing via `CollectionService:GetTags` + `RemoveTag` before adding the archived set would make restore replace, matching the documented intent and the Python-side tag handling philosophy.
-
-**Impact**  
-Correctness / data fidelity on restore.
+*(none)*
 
 ---
 
@@ -58,6 +53,7 @@ These correctness problems were fixed during development and are no longer prese
 4. Duplicate `<Tags>` elements no longer appear on rebuild.
 5. `set_prop_value` refuses non-scalar properties that contain a `"children"` dict.
 6. Extract prefers the `Name` property over a missing `Item@name` attribute (real Studio .rbxlx format).
+7. `Verde.restoreScripts` now clears existing tags via `CollectionService:GetTags` + `RemoveTag` before applying the archived tag set (previously merged).
 
 ---
 
