@@ -105,6 +105,14 @@ Toolbar button + dockable panel providing Live Sync toggle, Search, Set/Replace,
 **Description**  
 Re-exports reuse existing filesystem paths instead of inventing Name_2 suffixes. Content-hash comparison avoids unnecessary writes. Intra-run sibling collisions still receive numeric suffixes. On case-insensitive filesystems uniqueness is case-insensitive so "Foo" / "foo" cannot clobber each other.
 
+### 12. Status report CLI (`verde-status`)
+
+**Description**  
+Read-only command that answers “which files are dirty?” and “is the Live Sync bridge reachable?”. Reports clean / dirty / missing tracked files from `.verde/manifest.json` (adler32 + mtime) and optionally probes the Live Sync bridge on localhost:3847 (GET /status). Human-readable by default; `--json` for tooling. Supports `-v` for recorded hash/mtime details. Zero side-effects; re-uses existing helpers from `features/sync.py`. No new dependencies.
+
+**Key components**  
+- `python/features/status.py` (`verde-status`)
+
 ---
 
 *This list is the authoritative record of what exists today. When a feature lands via Build, update this file in the same change set.*
