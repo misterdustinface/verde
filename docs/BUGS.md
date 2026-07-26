@@ -9,16 +9,7 @@ Missing features and intentional design choices live in `TODO_FEATURES.md`.
 
 ## Open issues
 
-### 1. Case-insensitive extract uniqueness vs case-sensitive import path maps
-
-On Darwin/Windows, `extract.py` uniquifies sibling Names with `name.casefold()` so `Foo` / `foo` become `Foo` + `foo_2` on disk. `build.py` `_build_instance_maps` builds the path map with a case-sensitive `used` set. Differential import therefore cannot match the on-disk `foo_2` path for the original case-sibling and silently skips the update.
-
-Rare (requires two siblings that differ only by case under the same parent) but real data-fidelity loss on case-insensitive filesystems.
-
-**Impact**  
-Correctness / silent data skip on import (Darwin/Windows).
-
-### 2. Luau dump/restore corrupts tags that contain commas
+### 1. Luau dump/restore corrupts tags that contain commas
 
 `Verde.dumpScripts` stores tags via `table.concat(tags, ",")` into a string attribute. Restore splits on `","`. Any CollectionService tag that itself contains a comma is truncated or split into multiple tags.
 
@@ -54,7 +45,7 @@ These behaviours are deliberate and should not be “fixed” without an explici
 
 - **Name sanitisation vs `GetFullName`** (Luau dump/restore): archive hierarchy uses a limited sanitiser; the preferred restore path uses the original `OriginalFullName`. Fallback relative paths use the sanitised form and can mismatch when names contain the sanitised characters.
 - **Child order** is not preserved (Python import sorts `iterdir()`). Usually harmless but prevents byte-identical round-trips.
-- **Fragile interesting-props extraction** (`interesting.py`): a simple regex works today but will be polluted by any future double-quoted string in the Luau file.
+- **Fragile interesting-props extraction** (`interesting.py): a simple regex works today but will be polluted by any future double-quoted string in the Luau file.
 - **Plugin recording**: no user feedback when `ChangeHistoryService:TryBeginRecording` returns `nil` (playtest, concurrent recording, etc.).
 - **Orphaned uniquified paths**: if a previous export created `Name_2` because of a sibling collision that no longer exists, a later re-export will write to `Name` and leave the old `Name_2` on disk. Empty-dir prune does not remove non-empty leftovers.
 - **Tags as SharedString on extract**: extract only decodes Tags when the property type is BinaryString / string / ProtectedString. A SharedString Tags value stays in the full Properties map and `meta["Tags"]` remains empty (pass-through on rebuild). Edge format; not observed as common.
@@ -77,6 +68,7 @@ These correctness problems were fixed during development and are no longer prese
 8. `build.add_properties` only suppresses Tags from the full Properties map when `meta["Tags"]` is non-empty (previously any leftover SharedString hash was dropped).
 9. `Verde.applyMeta` now fully replaces the Attributes set (removes attributes present on the target but absent from `meta.Attributes`, then sets/updates the wanted ones) when the key is present as a table. Matches Tags handling in the same function and the offline Python path.
 10. Live Sync `BridgeState.write_file` (Studio→folder) now calls `write_manifest` and reloads `self.manifest` after updating the in-memory known map (mirrors `mark_applied`). Previously the on-disk manifest stayed stale, so a just-pushed file immediately looked dirty again and could produce echo noise / status flicker. Fixed in PR #8; docs update completed here.
+11. On Darwin/Windows, `_build_instance_maps` in `build.py` now applies the same casefold uniqueness as `extract.py` when constructing the hierarchy path map. Previously a case-only sibling collision (Foo / foo → Foo + foo_2 on disk) produced a path_map key that could not match the on-disk `foo_2`, causing silent skip of the update on differential import. Fixed here.
 
 ---
 
