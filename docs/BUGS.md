@@ -5,6 +5,19 @@ Missing features and intentional design choices live in `TODO_FEATURES.md`.
 
 **Important design principle:** Case sensitivity of properties and tags is intentional and valuable. Roblox itself treats tags and many property string values as case-sensitive. Verde’s live Luau path therefore preserves exact case for final set/replace operations. Case-insensitive filters exist only as a discovery aid; when they produce ambiguous matches that differ only by case, the preferred future behaviour is interactive prompting (see TODO_FEATURES), not silent case-folding of the final value.
 
+### Agent / skill maintenance rule (github-pickaxe, github-inspect, github-inspire, github-iterate, and related)
+
+The Open issues list must stay usefully populated for as long as residual true defects exist in the system. “None currently.” is not a terminal state while residual notes, known edge cases, or silent-failure paths remain.
+
+When Open issues is empty, contains only “None currently.”, or is sparse (roughly fewer than 5–7 prioritized items) while residual defects are still present:
+
+1. Scan the residual notes in this file, recent code (extract / build / Luau / plugin / bridge), tests, and previously-corrected items for remaining true defects.
+2. Prioritize by impact: silent failure, data loss, and Live Sync reliability first.
+3. Rewrite the Open issues section as a numbered prioritized list with short impact statements.
+4. Keep pure missing features in `TODO_FEATURES.md` and intentional design choices in the Intentional design section.
+
+`github-inspect` is the primary skill for this scan-and-populate step. `github-pickaxe` and `github-iterate` must invoke or re-run the scan when the list is sparse before treating the bug list as clean. `github-inspire` should note or recommend the same when it reads a sparse list.
+
 ---
 
 ## Open issues
