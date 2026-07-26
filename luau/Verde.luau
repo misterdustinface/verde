@@ -365,10 +365,19 @@ function Verde.restoreScripts(options: RestoreOptions?): (number, number, number
 		if runContext ~= nil then
 			pcall(function() (target :: any).RunContext = Enum.RunContext[runContext :: string] end)
 		end
-		if typeof(tagsAttr) == "string" and (tagsAttr :: string) ~= "" then
-			for _, tag in string.split(tagsAttr :: string, ",") do
-				tag = (tag:match("^%s*(.-)%s*$") or tag)
-				if tag ~= "" then CollectionService:AddTag(target, tag) end
+		if typeof(tagsAttr) == "string" then
+			-- Replace (do not merge) the tag set so restore matches documented intent
+			-- and the same philosophy used by applyMeta / Python-side tag handling.
+			for _, existing in CollectionService:GetTags(target) do
+				CollectionService:RemoveTag(target, existing)
+			end
+			if (tagsAttr :: string) ~= "" then
+				for _, tag in string.split(tagsAttr :: string, ",") do
+					tag = (tag:match("^%s*(.-)%s*$") or tag)
+					if tag ~= "" then
+						CollectionService:AddTag(target, tag)
+					end
+				end
 			end
 		end
 		restored += 1
