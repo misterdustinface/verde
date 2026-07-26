@@ -9,7 +9,56 @@ Missing features and intentional design choices live in `TODO_FEATURES.md`.
 
 ## Open issues
 
-None currently.
+Prioritized by impact (data loss / silent failure / Live Sync reliability first).
+
+### 1. Silent `bridgePost` failures in the plugin (Live Sync Studio→folder)
+
+`pushInstanceToBridge` calls `Verde.bridgePost("/push", …)` and ignores the success/error return value. When the bridge is down, HttpService is disabled, or the POST fails for any other reason, Studio→folder edits are dropped with no status-line feedback. The user only discovers the problem on the next successful poll or full-scan.
+
+**Impact**  
+Silent data loss for Live Sync writes originating in Studio.
+
+### 2. Orphaned uniquified paths left on disk after re-export
+
+Path-reuse correctly writes to a clean `Name` when a previous sibling collision no longer exists, but the old `Name_2` (or higher) directory/file is never removed. Empty-dir prune only deletes empty folders; non-empty leftovers accumulate across repeated exports.
+
+**Impact**  
+Stale files and folders accumulate in the extracted tree; later imports or Live Sync can see phantom paths.
+
+### 3. Name sanitisation vs `OriginalFullName` / `GetFullName` mismatch (Luau dump/restore)
+
+`dumpScripts` builds the archive hierarchy with a limited sanitiser (`[/\\%z]` → `_`). The preferred restore path uses the original `OriginalFullName` attribute. When that attribute is missing or the fallback relative-path logic is used, the sanitised form can fail to locate the target instance for names that contained the replaced characters.
+
+**Impact**  
+Restore can skip or mis-place scripts whose names contain `/`, `\\`, or nulls when falling back from `OriginalFullName`.
+
+### 4. Plugin: no feedback when `ChangeHistoryService:TryBeginRecording` returns nil
+
+Several plugin actions (set/replace, tag rename, restore, Live Sync apply) call `TryBeginRecording` and only call `FinishRecording` when a recording handle is returned. When the call returns `nil` (playtest, concurrent recording, etc.) the mutation still proceeds but the user receives no warning that the change will not be undoable via Studio’s history.
+
+**Impact**  
+Silent loss of undo history for the affected operation.
+
+### 5. Tags stored as SharedString are not decoded on extract
+
+`extract_properties` only promotes Tags into `meta["Tags"]` when the property type is `BinaryString`, `string`, or `ProtectedString`. A `SharedString` Tags value remains inside the full Properties map; `meta["Tags"]` stays empty and the offline tag tools see no tags for that instance (pass-through on rebuild only).
+
+**Impact**  
+Tag search/replace and Live Sync meta lose tags for the uncommon SharedString encoding.
+
+### 6. Fragile interesting-properties extraction
+
+`python/interesting.py` extracts property names with a simple `re.findall(r'"([^"]+)"', text)` over the Luau source. Any future double-quoted string that is not a property name (comment, error message, etc.) will pollute the interesting set.
+
+**Impact**  
+Incorrect or incomplete “interesting” surface for search/set until the Luau file is cleaned or the parser is hardened.
+
+### 7. Child order not preserved on Python import
+
+`build` / import walks the filesystem with `iterdir()` (effectively sorted by name on most platforms). Original sibling order from the `.rbxlx` is not recorded or restored. Usually harmless for behaviour, but prevents byte-identical round-trips and can affect systems that rely on child order.
+
+**Impact**  
+Non-identical rebuilds; potential ordering surprises for order-sensitive instances.
 
 ---
 
@@ -34,16 +83,10 @@ These behaviours are deliberate and should not be “fixed” without an explici
 
 ---
 
-## Remaining minor / edge-case notes
+## Remaining lower-severity notes
 
-- **Name sanitisation vs `GetFullName`** (Luau dump/restore): archive hierarchy uses a limited sanitiser; the preferred restore path uses the original `OriginalFullName`. Fallback relative paths use the sanitised form and can mismatch when names contain the sanitised characters.
-- **Child order** is not preserved (Python import sorts `iterdir()`). Usually harmless but prevents byte-identical round-trips.
-- **Fragile interesting-props extraction** (`interesting.py): a simple regex works today but will be polluted by any future double-quoted string in the Luau file.
-- **Plugin recording**: no user feedback when `ChangeHistoryService:TryBeginRecording` returns `nil` (playtest, concurrent recording, etc.).
-- **Orphaned uniquified paths**: if a previous export created `Name_2` because of a sibling collision that no longer exists, a later re-export will write to `Name` and leave the old `Name_2` on disk. Empty-dir prune does not remove non-empty leftovers.
-- **Tags as SharedString on extract**: extract only decodes Tags when the property type is BinaryString / string / ProtectedString. A SharedString Tags value stays in the full Properties map and `meta["Tags"]` remains empty (pass-through on rebuild). Edge format; not observed as common.
-- **Silent bridgePost errors in plugin**: `pushInstanceToBridge` does not surface `bridgePost` failures to the status line; a dead bridge loses Studio→folder edits until the next poll error.
 - **Attributes search/filter and Luau wrappers** remain open (see TODO_FEATURES); not defects in the existing binary round-trip.
+- Live Sync “N file(s) had no matching script” noise after renames / missing Referents is tracked as a future healing feature (TODO I1), not a pure defect in the current path-matching fallback.
 
 ---
 
