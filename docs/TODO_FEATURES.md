@@ -7,40 +7,9 @@ Pure defects remain in `BUGS.md`.
 
 ## APPROVED
 
-Ordered per operator preference.
+Ordered per operator preference. (Items 1–2 from the previous list shipped; remaining renumbered.)
 
-### 1. `verde-status` CLI for manifest dirtiness and bridge health
-
-**Description**  
-There is currently no single, zero-risk command that answers “which files are dirty?” or “is the Live Sync bridge reachable?”. Artists and power users both benefit from an instant, read-only status check.
-
-**Scope**  
-- New entry point `verde-status [extracted/]` (default: current directory or the path last used by sync).
-- Report clean / dirty / missing files from `.verde/manifest.json` (optionally with hash and mtime).
-- Optionally probe `localhost:3847` and report whether the bridge is up plus any last-activity hint the bridge already exposes.
-- Purely read-only; re-uses helpers already present in `features/sync.py` and `features/bridge.py`.
-- Human-readable default; honour a `--json` flag for machine consumption (aligns with pending JSON output work).
-- Document in the main README and SYSTEM_OVERVIEW; no new dependencies or configuration surface.
-
----
-
-### 2. Interactive disambiguation for case-insensitive search matches
-
-**Description**  
-When a case-insensitive search (e.g. `propContains` / nameContains / tag filters) yields multiple distinct values that differ only by case, prompt the user to choose which match(es) to act on instead of silently applying a case-insensitive equality or forcing one. Case sensitivity for properties and tags remains intentional and important.
-
-**Why**  
-Per HUMAN OPERATOR guidance: case matters for properties and tags. The previous approach of making `replaceProp` fully case-insensitive was rejected. Search can still be helpful case-insensitively for discovery, but the final selection / replace must respect exact case and offer explicit choice when ambiguity exists.
-
-**Rough idea / Scope**
-- In the Studio plugin UI and (optionally) CLI interactive mode, when the candidate set contains multiple values that collide under case-folding, present a short list (original-cased values + instance counts / paths) and let the user pick one or more before proceeding with set/replace.
-- Keep non-interactive / scripted paths exact-case by default.
-- Do not change the existing exact-match final check in `Verde.replaceProp` or Python `only_if_old`.
-- Document the behaviour clearly so users understand that case-insensitive filters are for discovery only.
-
----
-
-### 3. Selective extract / partial rebuild
+### 1. Selective extract / partial rebuild
 
 **Description**  
 Extract or rebuild only a subtree (e.g. everything under `ServerScriptService` or a single tagged model) instead of the whole place.
@@ -53,7 +22,7 @@ Extract or rebuild only a subtree (e.g. everything under `ServerScriptService` o
 
 ---
 
-### 4. Preserve root-level Meta / External / SharedStrings
+### 2. Preserve root-level Meta / External / SharedStrings
 
 **Description**  
 Some `.rbxlx` files contain top-level elements outside the main `Item` tree (`Meta`, `External`, `ExternalAssets`, `SharedStrings`, etc.). These are currently dropped on extract/build.
@@ -66,7 +35,7 @@ Some `.rbxlx` files contain top-level elements outside the main `Item` tree (`Me
 
 ---
 
-### 5. Richer property round-tripping for complex / rare types
+### 3. Richer property round-tripping for complex / rare types
 
 **Description**  
 Improve fidelity for property types that currently lose information or are only partially reconstructed (NumberSequence / ColorSequence keypoints, PhysicalProperties, FontFace, Content, SharedString references, Attributes, etc.).
@@ -80,7 +49,7 @@ Improve fidelity for property types that currently lose information or are only 
 
 ---
 
-### 6. Plugin: persist last search filters
+### 4. Plugin: persist last search filters
 
 **Description**  
 Remember the most recent ClassName / Name / Tag / Property filters in the Studio plugin so users do not have to re-type them every session.
@@ -93,7 +62,7 @@ Remember the most recent ClassName / Name / Tag / Property filters in the Studio
 
 ---
 
-### 7. Streaming search / replace on live `.rbxlx`
+### 5. Streaming search / replace on live `.rbxlx`
 
 **Description**  
 Operate on a `.rbxlx` file in place (or via a temporary copy) without a full extract → edit → rebuild cycle. Useful for large places where disk I/O and intermediate folder trees are expensive.
@@ -106,7 +75,7 @@ Operate on a `.rbxlx` file in place (or via a temporary copy) without a full ext
 
 ---
 
-### 8. Live Sync with open Studio (CLI: `verde-sync`)
+### 6. Live Sync with open Studio (CLI: `verde-sync`)
 
 **Description**  
 Bi-directional event-driven sync between an extracted folder and an **open** Studio place (scripts-first).
@@ -132,7 +101,7 @@ Bi-directional event-driven sync between an extracted folder and an **open** Stu
 
 ---
 
-### 9. Plugin hierarchy navigator + recent-sync timeline
+### 7. Plugin hierarchy navigator + recent-sync timeline
 
 **Description**  
 Artists and designers currently context-switch between the extracted folder on disk and the Studio DataModel. A lightweight, scripts-first hierarchy view inside the existing Verde plugin panel, plus a short list of the most recent bridge events, would make Live Sync feel trustworthy and reduce the need to leave Studio to confirm what just happened.
