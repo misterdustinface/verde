@@ -275,7 +275,15 @@ local function pushInstanceToBridge(inst: Instance)
 		path = Verde.scriptRelPath(inst),
 		content = (inst :: LuaSourceContainer).Source,
 	})
-	Verde.bridgePost("/push", { files = files })
+	local okPush, errPush = Verde.bridgePost("/push", { files = files })
+	if not okPush then
+		setLiveStatus(
+			diagnoseBridgeFailure(errPush)
+				.. "\n\nStudio→folder push failed. Your last Source/meta edit may not have reached disk until the bridge is healthy again.",
+			true
+		)
+		-- leave liveOn running so the 1s poll can recover when the bridge returns
+	end
 end
 
 local function applyDirtyPaths(paths: { string })
