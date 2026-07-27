@@ -521,6 +521,8 @@ def _needs_update(
     if meta_attrs != _get_attributes(item):
         return True
 
+    # Compare against the merged view so --preserve-content blank skips do not
+    # force a needless write, and default blank applies are detected correctly.
     place_props = _current_structured_props(item)
     meta_props = meta.get("Properties") or {}
     merged_props = _merge_structured_props(
@@ -562,6 +564,9 @@ def _apply_meta_to_item(
     if "Referent" in meta:
         item.set("referent", str(meta["Referent"]))
 
+    # Merge place Properties with meta (place is base; meta overlays).
+    # With --preserve-content, blank/broken meta Content does not overwrite
+    # non-blank place values. UniqueId on the place Item always wins.
     place_props = _current_structured_props(item)
     meta_props = dict(meta.get("Properties") or {})
     merged = _merge_structured_props(
@@ -639,6 +644,7 @@ def import_rbxlx(
 
     referent_map, path_map = _build_instance_maps(root)
 
+    # --- Collect candidates (after dirty filter) ---
     candidates: list[dict[str, Any]] = []
     skipped_clean = 0
 
@@ -697,6 +703,8 @@ def import_rbxlx(
             }
         )
 
+    # --- Drop redundant disk entries (do not import them) ---
+    # Prefer entries that map into the place, then non-uniquified names.
     by_ref: dict[str, dict[str, Any]] = {}
     by_uid: dict[str, dict[str, Any]] = {}
     path_keys_present = {c["path_key"] for c in candidates if c["path_key"]}
@@ -704,6 +712,8 @@ def import_rbxlx(
     skipped_redundant = 0
 
     for c in candidates:
+        # Name_N leftover when bare Name is also a candidate and this entry
+        # has no distinct Referent of its own → skip as redundant disk file.
         is_uni, bare = _is_uniquified_path(c["path_key"])
         if is_uni and bare in path_keys_present and not c["ref"]:
             print(f"  · skip redundant disk entry {c['rel']} (Name_N leftover of {bare})")
@@ -718,6 +728,7 @@ def import_rbxlx(
                     print(f"  · skip redundant disk entry {c['rel']} (same Referent as {prev['rel']})")
                     skipped_redundant += 1
                     continue
+                # Replace previous with this one; remove prev from kept
                 print(f"  · skip redundant disk entry {prev['rel']} (same Referent as {c['rel']})")
                 skipped_redundant += 1
                 kept = [k for k in kept if k is not prev]
@@ -748,10 +759,11 @@ def import_rbxlx(
 
         kept.append(c)
 
+    # --- Apply kept candidates (each place Item at most once) ---
     updated = 0
     unchanged = 0
     skipped_no_match = 0
-    applied_items: set[int] = set()
+    applied_items: set[int] = set()  # id(item)
 
     for c in kept:
         meta = c["meta"]
@@ -776,6 +788,7 @@ def import_rbxlx(
             skipped_redundant += 1
             continue
 
+        # Safety net: keep the UniqueId already on the place Item.
         existing_uid = _get_unique_id(item)
         if existing_uid is not None:
             meta = dict(meta)
