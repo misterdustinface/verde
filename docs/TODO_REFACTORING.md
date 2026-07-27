@@ -7,17 +7,7 @@ Purely stylistic or low-impact changes do not belong here. Defects stay in BUGS.
 
 ## Recommended
 
-### 1. Extract shared `_prompt_choices` helper from tags.py / set_replace.py
-
-**Why / Impact**  
-Near-identical interactive prompt helpers are duplicated in two feature modules. Extracting to a small common util reduces ~30-40 lines and keeps prompt behaviour consistent.
-
-**Scope / Approach**  
-- Move the common prompt logic into a shared helper (e.g. under features/ or a new util).
-- Update call sites in tags.py and set_replace.py.
-
-**Performance notes**  
-Neutral (CLI interactive path only; no hot-path impact).
+*(none currently — scan after the shared prompt extraction found no additional high-bar candidates that clear impact + size-reduction + performance-neutral)*
 
 ---
 
@@ -30,3 +20,11 @@ Extracted the identical `parse_children`, `parse_property_element`, and near-ide
 
 **Performance**  
 Neutral (same algorithms, pure functions, single source of truth). Enables future optimisations of the structured property parser in one place. Removes ~80-100 lines of duplication and improves maintainability of the critical round-trip path.
+
+### 2. Extract shared `prompt_choices` helper from tags.py / set_replace.py — DONE
+
+**What changed**  
+Moved the identical interactive case-disambiguation prompt (numbered list of (value, count) variants, support for a/all/n, multi-select) into `features/meta.py` as `prompt_choices`. Updated both call sites to import and use the shared function; deleted the two private local copies.
+
+**Performance outcome**  
+Neutral (CLI interactive path only). Removes ~35 lines of duplication and keeps prompt behaviour consistent between the two feature CLIs.

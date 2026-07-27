@@ -3,7 +3,8 @@
 Shared helpers for walking extracted trees and reading/writing properties.
 
 Used by the features (search, set_replace, tags) so the meta JSON layout is
-handled in one place.
+handled in one place. Also hosts small pure CLI helpers (e.g. interactive
+prompts) that are shared across feature CLIs.
 """
 
 from __future__ import annotations
@@ -153,3 +154,46 @@ def matches(
         if prop_contains is not None and prop_contains.lower() not in str(val).lower():
             return False
     return True
+
+
+def prompt_choices(variants: list[tuple[str, int]], label: str) -> list[str]:
+    """Present numbered list of (value, count) and return the chosen exact values.
+
+    Shared interactive helper used by tags and set_replace CLIs when case-
+    insensitive discovery finds multiple original-cased variants.
+    """
+    print(f"\nAmbiguous {label} (differ only by case):")
+    for i, (val, count) in enumerate(variants, 1):
+        print(f"  {i}. {val!r}  ({count} instance(s))")
+    print("  a. all of the above")
+    print("  n. none / cancel")
+    while True:
+        try:
+            raw = input("Choose number(s), 'a', or 'n' [n]: ").strip().lower() or "n"
+        except EOFError:
+            return []
+        if raw in ("n", "none", "cancel", ""):
+            return []
+        if raw in ("a", "all"):
+            return [v for v, _ in variants]
+        chosen: list[str] = []
+        ok = True
+        for part in raw.replace(",", " ").split():
+            if not part.isdigit():
+                ok = False
+                break
+            idx = int(part)
+            if not (1 <= idx <= len(variants)):
+                ok = False
+                break
+            chosen.append(variants[idx - 1][0])
+        if ok and chosen:
+            # preserve order, unique
+            seen: set[str] = set()
+            ordered: list[str] = []
+            for c in chosen:
+                if c not in seen:
+                    seen.add(c)
+                    ordered.append(c)
+            return ordered
+        print("  Invalid choice; try again.")

@@ -15,46 +15,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-from .meta import save_meta, walk_metas
-
-
-def _prompt_choices(variants: list[tuple[str, int]], label: str) -> list[str]:
-    """Present numbered list of (value, count) and return the chosen exact values."""
-    print(f"\nAmbiguous {label} (differ only by case):")
-    for i, (val, count) in enumerate(variants, 1):
-        print(f"  {i}. {val!r}  ({count} instance(s))")
-    print("  a. all of the above")
-    print("  n. none / cancel")
-    while True:
-        try:
-            raw = input("Choose number(s), 'a', or 'n' [n]: ").strip().lower() or "n"
-        except EOFError:
-            return []
-        if raw in ("n", "none", "cancel", ""):
-            return []
-        if raw in ("a", "all"):
-            return [v for v, _ in variants]
-        chosen: list[str] = []
-        ok = True
-        for part in raw.replace(",", " ").split():
-            if not part.isdigit():
-                ok = False
-                break
-            idx = int(part)
-            if not (1 <= idx <= len(variants)):
-                ok = False
-                break
-            chosen.append(variants[idx - 1][0])
-        if ok and chosen:
-            # preserve order, unique
-            seen: set[str] = set()
-            ordered: list[str] = []
-            for c in chosen:
-                if c not in seen:
-                    seen.add(c)
-                    ordered.append(c)
-            return ordered
-        print("  Invalid choice; try again.")
+from .meta import save_meta, walk_metas, prompt_choices
 
 
 def main() -> None:
@@ -138,7 +99,7 @@ def main() -> None:
             to_replace = [variants[0][0]]
         elif args.interactive or (sys.stdin.isatty() and args.ignore_case):
             # Interactive path when ambiguity + (explicit flag or TTY + ignore-case)
-            to_replace = _prompt_choices(variants, "tags")
+            to_replace = prompt_choices(variants, "tags")
             if not to_replace:
                 print("Cancelled.")
                 return
