@@ -25,6 +25,17 @@ considered for application (still only written when content actually differs
 via _needs_update). Useful when timestamps have drifted or the place was
 touched outside Verde.
 
+Differential import deliberately skips redundant on-disk entries so they are
+never applied into the place:
+- Multiple metas sharing the same Referent → only one is kept.
+- Multiple metas sharing the same UniqueId (from meta) → only one is kept.
+- Uniquified paths (Name_N) when a bare Name sibling is also present and the
+  _N entry has no distinct Referent → treated as leftover and skipped.
+- A place Item is updated at most once per import run.
+
+When a matched place Item already has a UniqueId, that value is preserved
+(safety net). We do not invent or regenerate UniqueIds for disk duplicates.
+
 Understands the full structured Properties map (all types) plus Tags and
 Attributes so that round-trips are as lossless as possible.
 
@@ -38,6 +49,7 @@ import argparse
 import base64
 import json
 import platform
+import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
@@ -48,6 +60,7 @@ from xml_props import sanitize_name, parse_children, parse_property_element, dec
 
 
 _FS_CASE_INSENSITIVE = platform.system() in ("Darwin", "Windows")
+_UNIQUIFY_RE = re.compile(r"^(.+)_([0-9]+)$")
 
 
 def read_text(path: Path) -> str:
@@ -365,6 +378,43 @@ def _get_attributes(item: ET.Element) -> dict[str, Any]:
     return {}
 
 
+def _get_unique_id(item: ET.Element) -> str | None:
+    """Return the UniqueId property value already present on an Item, or None."""
+    props = item.find("Properties")
+    if props is None:
+        return None
+    for p in props:
+        if p.get("name") == "UniqueId" and p.text:
+            return p.text.strip()
+    return None
+
+
+def _meta_unique_id(meta: dict[str, Any]) -> str | None:
+    """Return UniqueId value stored in a folder meta, if any."""
+    props = meta.get("Properties") or {}
+    structured = props.get("UniqueId")
+    if isinstance(structured, dict):
+        val = structured.get("value")
+        return str(val).strip() if val is not None else None
+    if isinstance(structured, str) and structured.strip():
+        return structured.strip()
+    return None
+
+
+def _is_uniquified_path(path_key: str) -> tuple[bool, str]:
+    """If the final path segment looks like Name_N, return (True, bare path)."""
+    if not path_key:
+        return False, path_key
+    parts = path_key.split("/")
+    last = parts[-1]
+    m = _UNIQUIFY_RE.match(last)
+    if not m:
+        return False, path_key
+    bare_last = m.group(1)
+    bare = "/".join(parts[:-1] + [bare_last]) if len(parts) > 1 else bare_last
+    return True, bare
+
+
 def _current_structured_props(item: ET.Element) -> dict[str, Any]:
     full: dict[str, Any] = {}
     props_elem = item.find("Properties")
@@ -445,6 +495,27 @@ def _apply_meta_to_item(
     add_properties(item, meta, source=source)
 
 
+def _prefer_candidate(
+    a: dict[str, Any],
+    b: dict[str, Any],
+    path_map: dict[str, ET.Element],
+) -> dict[str, Any]:
+    """Prefer the candidate whose path exists in the place, else non-uniquified name."""
+    a_in_place = a["path_key"] in path_map if a["path_key"] else False
+    b_in_place = b["path_key"] in path_map if b["path_key"] else False
+    if a_in_place and not b_in_place:
+        return a
+    if b_in_place and not a_in_place:
+        return b
+    a_uni, _ = _is_uniquified_path(a["path_key"] or "")
+    b_uni, _ = _is_uniquified_path(b["path_key"] or "")
+    if a_uni and not b_uni:
+        return b
+    if b_uni and not a_uni:
+        return a
+    return a  # stable: keep first
+
+
 def import_rbxlx(extracted_dir: str, output_rbxlx: str, force: bool = False) -> None:
     input_path = Path(extracted_dir)
     if not input_path.is_dir():
@@ -478,9 +549,8 @@ def import_rbxlx(extracted_dir: str, output_rbxlx: str, force: bool = False) -> 
 
     referent_map, path_map = _build_instance_maps(root)
 
-    updated = 0
-    unchanged = 0
-    skipped_no_match = 0
+    # --- Collect candidates (after dirty filter) ---
+    candidates: list[dict[str, Any]] = []
     skipped_clean = 0
 
     for meta_path, meta in walk_metas(input_path):
@@ -488,7 +558,6 @@ def import_rbxlx(extracted_dir: str, output_rbxlx: str, force: bool = False) -> 
         rel_str = str(rel).replace("\\", "/")
         source: str | None = None
         path_key: str | None = None
-        base_for_script: str | None = None
         related_rels: list[str] = [rel_str]
 
         if meta_path.name == ".robloxmeta.json":
@@ -527,25 +596,118 @@ def import_rbxlx(extracted_dir: str, output_rbxlx: str, force: bool = False) -> 
                 skipped_clean += 1
                 continue
 
+        candidates.append(
+            {
+                "meta_path": meta_path,
+                "rel": rel,
+                "meta": meta,
+                "source": source,
+                "path_key": path_key or "",
+                "ref": meta.get("Referent") if isinstance(meta.get("Referent"), str) else None,
+                "uid": _meta_unique_id(meta),
+            }
+        )
+
+    # --- Drop redundant disk entries (do not import them) ---
+    # Prefer entries that map into the place, then non-uniquified names.
+    by_ref: dict[str, dict[str, Any]] = {}
+    by_uid: dict[str, dict[str, Any]] = {}
+    path_keys_present = {c["path_key"] for c in candidates if c["path_key"]}
+    kept: list[dict[str, Any]] = []
+    skipped_redundant = 0
+
+    for c in candidates:
+        # Name_N leftover when bare Name is also a candidate and this entry
+        # has no distinct Referent of its own → skip as redundant disk file.
+        is_uni, bare = _is_uniquified_path(c["path_key"])
+        if is_uni and bare in path_keys_present and not c["ref"]:
+            print(f"  · skip redundant disk entry {c['rel']} (Name_N leftover of {bare})")
+            skipped_redundant += 1
+            continue
+
+        if c["ref"]:
+            prev = by_ref.get(c["ref"])
+            if prev is not None:
+                winner = _prefer_candidate(prev, c, path_map)
+                if winner is prev:
+                    print(f"  · skip redundant disk entry {c['rel']} (same Referent as {prev['rel']})")
+                    skipped_redundant += 1
+                    continue
+                # Replace previous with this one; remove prev from kept
+                print(f"  · skip redundant disk entry {prev['rel']} (same Referent as {c['rel']})")
+                skipped_redundant += 1
+                kept = [k for k in kept if k is not prev]
+                by_ref[c["ref"]] = c
+                if prev.get("uid"):
+                    by_uid.pop(prev["uid"], None)
+            else:
+                by_ref[c["ref"]] = c
+
+        if c["uid"]:
+            prev = by_uid.get(c["uid"])
+            if prev is not None and prev is not c:
+                winner = _prefer_candidate(prev, c, path_map)
+                if winner is prev:
+                    print(f"  · skip redundant disk entry {c['rel']} (same UniqueId as {prev['rel']})")
+                    skipped_redundant += 1
+                    if c["ref"] and by_ref.get(c["ref"]) is c:
+                        by_ref.pop(c["ref"], None)
+                    continue
+                print(f"  · skip redundant disk entry {prev['rel']} (same UniqueId as {c['rel']})")
+                skipped_redundant += 1
+                kept = [k for k in kept if k is not prev]
+                by_uid[c["uid"]] = c
+                if prev.get("ref") and by_ref.get(prev["ref"]) is prev:
+                    by_ref.pop(prev["ref"], None)
+            else:
+                by_uid[c["uid"]] = c
+
+        kept.append(c)
+
+    # --- Apply kept candidates (each place Item at most once) ---
+    updated = 0
+    unchanged = 0
+    skipped_no_match = 0
+    applied_items: set[int] = set()  # id(item)
+
+    for c in kept:
+        meta = c["meta"]
+        source = c["source"]
+        path_key = c["path_key"]
+        ref = c["ref"]
+
         item: ET.Element | None = None
-        ref = meta.get("Referent")
-        if isinstance(ref, str) and ref in referent_map:
+        if ref and ref in referent_map:
             item = referent_map[ref]
-        elif path_key is not None and path_key in path_map:
+        elif path_key and path_key in path_map:
             item = path_map[path_key]
-        elif path_key == "":
-            pass
 
         if item is None:
-            print(f"  · no match for {rel} (skip; will not auto-create yet)")
+            print(f"  · no match for {c['rel']} (skip; will not auto-create yet)")
             skipped_no_match += 1
             continue
 
+        item_id = id(item)
+        if item_id in applied_items:
+            print(f"  · skip {c['rel']} (place instance already updated this run)")
+            skipped_redundant += 1
+            continue
+
+        # Safety net: keep the UniqueId already on the place Item.
+        existing_uid = _get_unique_id(item)
+        if existing_uid is not None:
+            meta = dict(meta)
+            props = dict(meta.get("Properties") or {})
+            props["UniqueId"] = {"type": "UniqueId", "value": existing_uid}
+            meta["Properties"] = props
+
         if not _needs_update(item, meta, source):
             unchanged += 1
+            applied_items.add(item_id)
             continue
 
         _apply_meta_to_item(item, meta, source=source)
+        applied_items.add(item_id)
         updated += 1
 
     if updated:
@@ -559,6 +721,8 @@ def import_rbxlx(extracted_dir: str, output_rbxlx: str, force: bool = False) -> 
         print(f"  ({unchanged} matched instance(s) already up to date)")
     if skipped_clean:
         print(f"  ({skipped_clean} entry(ies) skipped — clean per manifest / mtime-win)")
+    if skipped_redundant:
+        print(f"  ({skipped_redundant} redundant disk entry(ies) skipped — Name_N / shared Referent or UniqueId)")
     if skipped_no_match:
         print(f"  ({skipped_no_match} folder entries had no matching instance in the place)")
     print("Open the place in Studio (or re-open) to see the changes.")
@@ -577,7 +741,9 @@ def main() -> None:
             "Import changes from a Verde extracted folder into an existing .rbxlx "
             "(or create the .rbxlx if it does not exist — full rebuild). "
             "CLI: verde-import. "
-            "Use --force to ignore mtime-win / clean-manifest skips."
+            "Use --force to ignore mtime-win / clean-manifest skips. "
+            "Redundant on-disk entries (Name_N leftovers, shared Referent/UniqueId) "
+            "are skipped so they are not imported into the place."
         )
     )
     parser.add_argument("extracted_dir", help="Path to extracted Verde folder")
@@ -594,7 +760,7 @@ def main() -> None:
             "Force consideration of all matching folder files, bypassing the "
             "manifest clean-check and mtime-win logic that would otherwise skip "
             "files older than the target .rbxlx. Content is still only written "
-            "when it actually differs."
+            "when it actually differs. Redundant disk entries are still skipped."
         ),
     )
     args = parser.parse_args()
