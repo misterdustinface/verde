@@ -594,7 +594,32 @@ local setTagBox = makeTextBox(content, "Only tag (optional)", UDim2.new(1, 0, 0,
 local setFromBox = makeTextBox(content, "Only if current value equals (optional)", UDim2.new(1, 0, 0, 28), UDim2.fromOffset(0, 746))
 
 local setBtn = makeButton(content, "Set / Replace", UDim2.new(1, 0, 0, 30), UDim2.fromOffset(0, 784))
-local setStatus = makeLabel(content, "", UDim2.new(1, 0, 0, 20), UDim2.fromOffset(0, 820))
+local setStatus = makeLabel(content, "", UDim2.new(1, 0, 0, 40), UDim2.fromOffset(0, 820))
+
+-- Helper: collect distinct current values that case-fold to the typed --from
+local function collectCaseVariants(propName: string, typedOld: string, opts: any): { string }
+	local fold = string.lower(typedOld)
+	local seen: { [string]: boolean } = {}
+	local list: { string } = {}
+	local candidates = Verde.search({
+		className = opts.className,
+		tag = opts.tag,
+		prop = propName,
+		propContains = typedOld, -- case-insensitive discovery
+	})
+	for _, inst in candidates do
+		local ok, cur = pcall(function() return (inst :: any)[propName] end)
+		if ok and cur ~= nil then
+			local s = tostring(cur)
+			if string.lower(s) == fold and not seen[s] then
+				seen[s] = true
+				table.insert(list, s)
+			end
+		end
+	end
+	table.sort(list)
+	return list
+end
 
 setBtn.MouseButton1Click:Connect(function()
 	local prop = setPropBox.Text
@@ -611,13 +636,31 @@ setBtn.MouseButton1Click:Connect(function()
 	local n: number
 	if setFromBox.Text ~= "" then
 		n = Verde.replaceProp(prop, setFromBox.Text, newV, opts)
+		if n == 0 then
+			local variants = collectCaseVariants(prop, setFromBox.Text, opts)
+			if #variants > 1 then
+				setStatus.Text = string.format(
+					"0 exact matches. Case variants found: %s\nRe-type one exact value in ‘Only if…’ and try again.",
+					table.concat(variants, ", ")
+				)
+			elseif #variants == 1 and variants[1] ~= setFromBox.Text then
+				setStatus.Text = string.format(
+					"0 exact matches. Closest case variant: %q\nCopy it into ‘Only if…’ to replace.",
+					variants[1]
+				)
+			else
+				setStatus.Text = "Updated 0 instance(s). (no matches)"
+			end
+		else
+			setStatus.Text = string.format("Updated %d instance(s).", n)
+		end
 	else
 		n = Verde.setProp(prop, newV, opts)
+		setStatus.Text = string.format("Updated %d instance(s).", n)
 	end
 	if recording then
 		ChangeHistoryService:FinishRecording(recording, Enum.FinishRecordingOperation.Commit)
 	end
-	setStatus.Text = string.format("Updated %d instance(s).", n)
 end)
 
 makeLabel(content, "TAGS", UDim2.new(1, 0, 0, 18), UDim2.fromOffset(0, 852))
@@ -644,7 +687,7 @@ local oldTagBox = makeTextBox(content, "Old tag", UDim2.new(0.48, 0, 0, 28), UDi
 local newTagBox = makeTextBox(content, "New tag", UDim2.new(0.48, 0, 0, 28), UDim2.new(0.52, 0, 0, 960))
 
 local renameTagBtn = makeButton(content, "Rename tag", UDim2.new(1, 0, 0, 30), UDim2.fromOffset(0, 996))
-local tagStatus = makeLabel(content, "", UDim2.new(1, 0, 0, 20), UDim2.fromOffset(0, 1032))
+local tagStatus = makeLabel(content, "", UDim2.new(1, 0, 0, 40), UDim2.fromOffset(0, 1032))
 
 renameTagBtn.MouseButton1Click:Connect(function()
 	local oldT, newT = oldTagBox.Text, newTagBox.Text
@@ -654,10 +697,36 @@ renameTagBtn.MouseButton1Click:Connect(function()
 	end
 	local recording = ChangeHistoryService:TryBeginRecording("Verde Rename Tag")
 	local n = Verde.replaceTag(oldT, newT)
+	if n == 0 then
+		-- Surface case variants so the user can type the exact tag
+		local map = Verde.listTags()
+		local fold = string.lower(oldT)
+		local variants = {}
+		for tag in pairs(map) do
+			if string.lower(tag) == fold then
+				table.insert(variants, tag)
+			end
+		end
+		table.sort(variants)
+		if #variants > 1 then
+			tagStatus.Text = string.format(
+				"0 exact matches. Case variants: %s\nType one exact tag name and try again.",
+				table.concat(variants, ", ")
+			)
+		elseif #variants == 1 and variants[1] ~= oldT then
+			tagStatus.Text = string.format(
+				"0 exact matches. Closest: %q\nCopy it into ‘Old tag’ to rename.",
+				variants[1]
+			)
+		else
+			tagStatus.Text = "Updated 0 instance(s). (no matches)"
+		end
+	else
+		tagStatus.Text = string.format("Updated %d instance(s).", n)
+	end
 	if recording then
 		ChangeHistoryService:FinishRecording(recording, Enum.FinishRecordingOperation.Commit)
 	end
-	tagStatus.Text = string.format("Updated %d instance(s).", n)
 end)
 
 makeLabel(content, "SCRIPTS (DUMP / RESTORE)", UDim2.new(1, 0, 0, 18), UDim2.fromOffset(0, 1064))

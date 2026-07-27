@@ -260,7 +260,8 @@ function Verde.dumpScripts(options: DumpOptions?): (Folder, number)
 		end
 		local tags = CollectionService:GetTags(scriptInstance)
 		if #tags > 0 then
-			archive:SetAttribute("Tags", table.concat(tags, ","))
+			-- JSON array so tags containing commas (or other special chars) round-trip cleanly.
+			archive:SetAttribute("Tags", HttpService:JSONEncode(tags))
 		end
 		archive.Parent = parent
 		count += 1
@@ -365,10 +366,37 @@ function Verde.restoreScripts(options: RestoreOptions?): (number, number, number
 		if runContext ~= nil then
 			pcall(function() (target :: any).RunContext = Enum.RunContext[runContext :: string] end)
 		end
+		-- Always replace the tag set so restore matches the archived state
+		-- (including the case where dump omitted the Tags attribute because
+		-- the original script had zero tags). Matches applyMeta / Python.
+		-- Tags are stored as a JSON array (post-fix) so commas and other
+		-- special characters inside tag names are preserved. Legacy comma-
+		-- joined dumps are still accepted for backward compatibility.
+		for _, existing in CollectionService:GetTags(target) do
+			CollectionService:RemoveTag(target, existing)
+		end
 		if typeof(tagsAttr) == "string" and (tagsAttr :: string) ~= "" then
-			for _, tag in string.split(tagsAttr :: string, ",") do
-				tag = (tag:match("^%s*(.-)%s*$") or tag)
-				if tag ~= "" then CollectionService:AddTag(target, tag) end
+			local tagsList: {string} = {}
+			local decodeOk, decoded = pcall(function()
+				return HttpService:JSONDecode(tagsAttr :: string)
+			end)
+			if decodeOk and typeof(decoded) == "table" then
+				for _, t in decoded :: {any} do
+					if typeof(t) == "string" and t ~= "" then
+						table.insert(tagsList, t)
+					end
+				end
+			else
+				-- Legacy comma-joined format (pre-JSON encoding)
+				for _, tag in string.split(tagsAttr :: string, ",") do
+					tag = (tag:match("^%s*(.-)%s*$") or tag)
+					if tag ~= "" then
+						table.insert(tagsList, tag)
+					end
+				end
+			end
+			for _, tag in tagsList do
+				CollectionService:AddTag(target, tag)
 			end
 		end
 		restored += 1
@@ -761,8 +789,17 @@ function Verde.applyMeta(target: Instance, meta: { [string]: any }): boolean
 	end
 
 	if typeof(meta.Attributes) == "table" then
+		local want: { [string]: any } = {}
 		for name, value in meta.Attributes :: { [string]: any } do
-			local decoded = decodeValue(value)
+			want[name] = decodeValue(value)
+		end
+		for name, _ in target:GetAttributes() do
+			if want[name] == nil then
+				pcall(function() target:SetAttribute(name, nil) end)
+				changed = true
+			end
+		end
+		for name, decoded in want do
 			local ok, cur = pcall(function() return target:GetAttribute(name) end)
 			if ok and not valuesEqual(cur, decoded) then
 				pcall(function() target:SetAttribute(name, decoded) end)

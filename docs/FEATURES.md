@@ -61,20 +61,22 @@ Find instances by ClassName, Name (contains), tag, or property value/contains. P
 ### 6. Bulk property set / replace (CLI + Studio)
 
 **Description**  
-Set a property to a value, or replace only when the current value matches an old value (`only_if`). Filters by class/tag/etc. Studio path uses ChangeHistoryService for undo. Complex / non-scalar properties are refused by the set path. Exact string equality for the final replace check (case-sensitive by design).
+Set a property to a value, or replace only when the current value matches an old value (`only_if`). Filters by class/tag/etc. Studio path uses ChangeHistoryService for undo. Complex / non-scalar properties are refused by the set path. Exact string equality for the final replace check (case-sensitive by design). When `--from` (or the plugin “Only if…” field) would match multiple distinct values that differ only by case, the CLI (`--interactive` / TTY) prompts for which exact value(s) to rewrite; the plugin lists the variants in the status line so the user can re-type an exact match.
 
 **Key components**  
 - `python/features/set_replace.py` (`verde-set` / `verde-replace`)
 - `luau/Verde.luau` (`setProp` / `replaceProp`)
+- `plugin/VerdePlugin.server.luau` (status-line variant listing)
 
 ### 7. Tag list / rename (CLI + Studio)
 
 **Description**  
-List all CollectionService tags in the place or folder tree; rename a tag across matching instances. Luau path is exact-case; Python search filters are currently case-insensitive for convenience.
+List all CollectionService tags in the place or folder tree; rename a tag across matching instances. Final mutations are exact-case on both paths. CLI `--replace` is exact by default; `--ignore-case` enables discovery of case-folded matches and `--interactive` (or a TTY) lets the user choose which exact original-cased tag(s) to rewrite. The plugin surfaces the same ambiguity in the status line when zero exact matches exist but case variants do.
 
 **Key components**  
 - `python/features/tags.py` (`verde-tags`)
 - `luau/Verde.luau` (`listTags` / `replaceTag`)
+- `plugin/VerdePlugin.server.luau` (status-line variant listing)
 
 ### 8. Attributes as first-class extract/build citizens
 
@@ -123,6 +125,14 @@ Foundation for partial place exports. `--root PATH` limits the export to a named
 
 **Key components**  
 - `python/extract.py`
+### 14. Interactive case disambiguation for set/replace and tags
+
+**Description**  
+When a case-insensitive discovery filter yields multiple distinct original-cased values (properties or tags), the CLI presents a short numbered list (value + instance count) and, under `--interactive` or a TTY, lets the user pick which exact value(s) to act on. Non-interactive multi-variant runs exit non-zero with the list so scripts remain deterministic. The Studio plugin lists the same variants in the status line when a replace finds zero exact matches, so the user can copy an exact value back into the input field. Final mutation always uses exact case (Roblox semantics).
+
+**Key components**  
+- `python/features/set_replace.py`, `python/features/tags.py`
+- `plugin/VerdePlugin.server.luau`
 
 ---
 

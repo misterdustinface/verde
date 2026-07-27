@@ -3,18 +3,73 @@
 True defects in current behaviour of verde (**v1.0.0**).
 Missing features and intentional design choices live in `TODO_FEATURES.md`.
 
-**Important design principle:** Case sensitivity of properties and tags is intentional and valuable. Roblox itself treats tags and many property string values as case-sensitive. Verde’s live Luau path therefore preserves exact case for final set/replace operations. Case-insensitive filters exist only as a discovery aid; when they produce ambiguous matches that differ only by case, the preferred future behaviour is interactive prompting (see TODO_FEATURES #11), not silent case-folding of the final value.
+**Important design principle:** Case sensitivity of properties and tags is intentional and valuable. Roblox itself treats tags and many property string values as case-sensitive. Verde’s live Luau path therefore preserves exact case for final set/replace operations. Case-insensitive filters exist only as a discovery aid; when they produce ambiguous matches that differ only by case, the preferred future behaviour is interactive prompting (see TODO_FEATURES), not silent case-folding of the final value.
+
+### Agent / skill maintenance rule (github-pickaxe, github-inspect, github-inspire, github-iterate, and related)
+
+The Open issues list must stay usefully populated for as long as residual true defects exist in the system. “None currently.” is not a terminal state while residual notes, known edge cases, or silent-failure paths remain.
+
+When Open issues is empty, contains only “None currently.”, or is sparse (roughly fewer than 5–7 prioritized items) while residual defects are still present:
+
+1. Scan the residual notes in this file, recent code (extract / build / Luau / plugin / bridge), tests, and previously-corrected items for remaining true defects.
+2. Prioritize by impact: silent failure, data loss, and Live Sync reliability first.
+3. Rewrite the Open issues section as a numbered prioritized list with short impact statements.
+4. Keep pure missing features in `TODO_FEATURES.md` and intentional design choices in the Intentional design section.
+
+`github-inspect` is the primary skill for this scan-and-populate step. `github-pickaxe` and `github-iterate` must invoke or re-run the scan when the list is sparse before treating the bug list as clean. `github-inspire` should note or recommend the same when it reads a sparse list.
 
 ---
 
 ## Open issues
 
-### 1. Restore does not clear existing tags
+### 1. Silent `bridgePost` failures in the plugin (Live Sync Studio→folder)
 
-`Verde.restoreScripts` currently *adds* the archived tags (from the `Tags` attribute) without first removing any tags already present on the target. Restore therefore merges rather than replaces the tag set. Clearing via `CollectionService:GetTags` + `RemoveTag` before adding the archived set would make restore replace, matching the documented intent and the Python-side tag handling philosophy.
+`pushInstanceToBridge` calls `Verde.bridgePost("/push", …)` and ignores the success/error return value. When the bridge is down, the HTTP request fails, or the payload is rejected, the plugin continues without updating the status line. Studio→folder Source/meta edits are therefore lost until the next poll cycle (or forever if the user never notices).
 
 **Impact**  
-Correctness / data fidelity on restore.
+Silent data loss for Live Sync in the Studio→folder direction.
+
+### 2. Orphaned uniquified paths left on disk after re-export
+
+When two siblings share a Name (or case-fold on Darwin/Windows), extract writes `Name` + `Name_2`. On a later re-export, if the colliding sibling is gone, path-reuse writes the survivor back to the bare `Name` path. The old `Name_2` directory/file is never removed because empty-dir prune only deletes empty directories. Over time the extracted tree accumulates stale uniquified leftovers.
+
+**Impact**  
+Disk clutter; potential confusion for users and for tools that walk the tree; residual files can be picked up by later imports if paths are ambiguous.
+
+### 3. Luau dump/restore name sanitisation vs `OriginalFullName` mismatch on fallback paths
+
+`dumpScripts` builds the archive hierarchy with a limited sanitiser (`[/\\%z]` → `_`). The preferred restore path uses the original `OriginalFullName` attribute. When that attribute is missing or empty, restore falls back to a relative path derived from the sanitised archive names. Names containing the sanitised characters therefore restore to the wrong hierarchy location.
+
+**Impact**  
+Incorrect restore location (or skipped restore) for scripts whose Names contain `/`, `\\`, or null.
+
+### 4. Plugin: no user feedback when `ChangeHistoryService:TryBeginRecording` returns nil
+
+Several plugin actions (Set/Replace, Rename tag, Restore scripts, Live Sync apply) call `TryBeginRecording`. When it returns `nil` (playtest mode, concurrent recording, etc.) the action still proceeds but no undo waypoint is created and the user receives no status-line indication.
+
+**Impact**  
+Silent loss of undo history; user may believe a change is undoable when it is not.
+
+### 5. Tags stored as SharedString are not decoded on extract
+
+`extract.py` only decodes the Tags property when its type is BinaryString, string, or ProtectedString. When Tags appears as a SharedString (rare but legal in some place formats), the value stays in the full Properties map and `meta["Tags"]` remains empty. Rebuild therefore does not re-emit a proper Tags BinaryString.
+
+**Impact**  
+Tags are lost on a round-trip for places that use the SharedString form.
+
+### 6. Fragile `interesting.py` property-name extraction
+
+The interesting-properties list is extracted from the Luau source with a simple regex that matches double-quoted strings. Any future double-quoted string that is not a property name (comments, string literals inside the module, etc.) will pollute the list, and legitimate property names written with single quotes or concatenation will be missed.
+
+**Impact**  
+Incorrect or incomplete “interesting” flatten set; search/set surface becomes unreliable if the Luau source changes style.
+
+### 7. Child order not preserved on Python import
+
+`build.py` / import walks the filesystem with `iterdir()`, whose order is not guaranteed and is typically sorted. Roblox instance child order is therefore not restored. Usually harmless for scripts, but prevents byte-identical round-trips and can affect order-sensitive behaviour (UI lists, some collection patterns).
+
+**Impact**  
+Non-identical rebuilds; rare behavioural differences for order-dependent instances.
 
 ---
 
@@ -34,17 +89,16 @@ These behaviours are deliberate and should not be “fixed” without an explici
 - **Scripts-only default on export**  
   Only directories that lead to scripts are written; empty directories are pruned. Use `--all` for the full hierarchy. Documented and intentional.
 
+- **mtime-win on import/merge**  
+  Most-recent-wins is the documented offline conflict policy; not a defect.
+
 ---
 
 ## Remaining minor / edge-case notes
 
-- **Name sanitisation vs `GetFullName`** (Luau dump/restore): archive hierarchy uses a limited sanitiser; the preferred restore path uses the original `OriginalFullName`. Fallback relative paths use the sanitised form and can mismatch when names contain the sanitised characters.
-- **Tags containing commas** (Luau dump): tags are joined with `","` and later split; a tag that itself contains a comma is corrupted.
-- **Child order** is not preserved (Python import sorts `iterdir()`). Usually harmless but prevents byte-identical round-trips.
-- **Fragile interesting-props extraction** (`interesting.py`): a simple regex works today but will be polluted by any future double-quoted string in the Luau file.
-- **Plugin recording**: no user feedback when `ChangeHistoryService:TryBeginRecording` returns `nil` (playtest, concurrent recording, etc.).
-- **Attributes**: full binary round-trip for AttributesSerialize is supported; search/filter by attribute and Luau wrappers remain open (see TODO #8).
-- **Orphaned uniquified paths**: if a previous export created `Name_2` because of a sibling collision that no longer exists, a later re-export will write to `Name` and leave the old `Name_2` on disk. Empty-dir prune does not remove non-empty leftovers.
+- **Attributes search/filter and Luau wrappers** remain open (see TODO_FEATURES); not defects in the existing binary round-trip.
+- Live Sync “N file(s) had no matching script” noise after renames is expected until Referent healing (TODO_FEATURES I1) lands; not treated as a correctness bug today.
+- Selective-extract foundation is shipped; import-side grafting of a partial tree is still residual feature work, not a defect.
 
 ---
 
@@ -58,7 +112,13 @@ These correctness problems were fixed during development and are no longer prese
 4. Duplicate `<Tags>` elements no longer appear on rebuild.
 5. `set_prop_value` refuses non-scalar properties that contain a `"children"` dict.
 6. Extract prefers the `Name` property over a missing `Item@name` attribute (real Studio .rbxlx format).
+7. `Verde.restoreScripts` now always clears existing tags via `CollectionService:GetTags` + `RemoveTag` before applying the archived tag set (including when dump omitted the Tags attribute because the original had zero tags).
+8. `build.add_properties` only suppresses Tags from the full Properties map when `meta["Tags"]` is non-empty (previously any leftover SharedString hash was dropped).
+9. `Verde.applyMeta` now fully replaces the Attributes set (removes attributes present on the target but absent from `meta.Attributes`, then sets/updates the wanted ones) when the key is present as a table. Matches Tags handling in the same function and the offline Python path.
+10. Live Sync `BridgeState.write_file` (Studio→folder) now calls `write_manifest` and reloads `self.manifest` after updating the in-memory known map (mirrors `mark_applied`). Previously the on-disk manifest stayed stale, so a just-pushed file immediately looked dirty again and could produce echo noise / status flicker. Fixed in PR #8; docs update completed here.
+11. On Darwin/Windows, `_build_instance_maps` in `build.py` now applies the same casefold uniqueness as `extract.py` when constructing the hierarchy path map. Previously a case-only sibling collision (Foo / foo → Foo + foo_2 on disk) produced a path_map key that could not match the on-disk `foo_2`, causing silent skip of the update on differential import. Fixed here.
+12. `Verde.dumpScripts` / `restoreScripts` no longer corrupt tags that contain commas. Tags are now stored as a JSON array via `HttpService:JSONEncode`; restore prefers JSONDecode and falls back to the legacy comma-split for older ScriptDump_* archives. Offline Python path was already safe (null-byte BinaryString).
 
 ---
 
-*Only true defects belong here. Case sensitivity of properties and tags is an important intentional feature; interactive handling of ambiguous case-insensitive search results is tracked in TODO_FEATURES #11.*
+*Only true defects belong here. Case sensitivity of properties and tags is an important intentional feature; interactive handling of ambiguous case-insensitive search results is tracked in TODO_FEATURES.*
