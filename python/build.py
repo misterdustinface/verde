@@ -33,10 +33,12 @@ never applied into the place:
   _N entry has no distinct Referent → treated as leftover and skipped.
 - A place Item is updated at most once per import run.
 
-When a matched place Item already has a UniqueId, that value is preserved.
-When meta would replace a non-empty place property (e.g. MeshId Content) with
-a blank/empty value — common with older exports that lost Content/<url>
-children — the place value is kept so valid meshes are not wiped.
+Property merge on differential apply:
+- Place is the base; meta overlays keys it carries.
+- By default meta wins even when blank (intentional MeshId clears propagate).
+- --preserve-content: blank/broken meta Content does not overwrite non-blank
+  place values — recovery only for older exports that lost Content/<url>.
+- UniqueId on the place Item is always preserved.
 
 Understands the full structured Properties map (all types) plus Tags and
 Attributes so that round-trips are as lossless as possible.
@@ -447,7 +449,6 @@ def _structured_is_blank(structured: Any) -> bool:
             if isinstance(v, dict):
                 if v.get("_value") is not None and str(v.get("_value")).strip() != "":
                     return False
-                # attrs-only or nested empties
                 rest = {k: x for k, x in v.items() if k != "_attrs"}
                 if not rest:
                     return True
@@ -464,19 +465,29 @@ def _structured_is_blank(structured: Any) -> bool:
 def _merge_structured_props(
     place_props: dict[str, Any],
     meta_props: dict[str, Any],
+    *,
+    preserve_content: bool = False,
 ) -> dict[str, Any]:
     """Overlay meta Properties onto place Properties for differential import.
 
-    Place is the base. Meta wins for keys it carries, except when meta would
-    replace a non-blank place value with a blank one. That protects MeshId /
-    TextureID / SoundId (and similar) when importing older exports whose Content
-    values were corrupted into empty strings.
+    Place is the base (keys only in the place are kept — incomplete metas do not
+    wipe unrelated props). Meta wins for every key it carries.
+
+    When preserve_content is True (CLI --preserve-content), blank/broken meta
+    values do not overwrite non-blank place values. That is an opt-in recovery
+    path for older exports that lost Content/<url>; default is False so
+    intentional clears (empty MeshId in the export) propagate correctly.
     """
     merged = dict(place_props)
     for key, meta_val in meta_props.items():
-        place_val = place_props.get(key)
-        if place_val is not None and not _structured_is_blank(place_val) and _structured_is_blank(meta_val):
-            continue
+        if preserve_content:
+            place_val = place_props.get(key)
+            if (
+                place_val is not None
+                and not _structured_is_blank(place_val)
+                and _structured_is_blank(meta_val)
+            ):
+                continue
         merged[key] = meta_val
     return merged
 
@@ -485,6 +496,8 @@ def _needs_update(
     item: ET.Element,
     meta: dict[str, Any],
     source: str | None,
+    *,
+    preserve_content: bool = False,
 ) -> bool:
     if "ClassName" in meta and str(meta["ClassName"]) != (item.get("class") or ""):
         return True
@@ -508,10 +521,11 @@ def _needs_update(
     if meta_attrs != _get_attributes(item):
         return True
 
-    # Compare against the merged view so blank meta MeshIds do not force a write
     place_props = _current_structured_props(item)
     meta_props = meta.get("Properties") or {}
-    merged_props = _merge_structured_props(place_props, meta_props)
+    merged_props = _merge_structured_props(
+        place_props, meta_props, preserve_content=preserve_content
+    )
     if merged_props != place_props:
         return True
 
@@ -538,6 +552,8 @@ def _apply_meta_to_item(
     item: ET.Element,
     meta: dict[str, Any],
     source: str | None = None,
+    *,
+    preserve_content: bool = False,
 ) -> None:
     if "ClassName" in meta:
         item.set("class", str(meta["ClassName"]))
@@ -546,12 +562,11 @@ def _apply_meta_to_item(
     if "Referent" in meta:
         item.set("referent", str(meta["Referent"]))
 
-    # Merge place Properties with meta. Blank/broken meta values (typical of
-    # older MeshId exports that lost Content/<url>) do not overwrite good
-    # place values. UniqueId on the place Item always wins.
     place_props = _current_structured_props(item)
     meta_props = dict(meta.get("Properties") or {})
-    merged = _merge_structured_props(place_props, meta_props)
+    merged = _merge_structured_props(
+        place_props, meta_props, preserve_content=preserve_content
+    )
     existing_uid = _get_unique_id(item)
     if existing_uid is not None:
         merged["UniqueId"] = {"type": "UniqueId", "value": existing_uid}
@@ -584,7 +599,12 @@ def _prefer_candidate(
     return a  # stable: keep first
 
 
-def import_rbxlx(extracted_dir: str, output_rbxlx: str, force: bool = False) -> None:
+def import_rbxlx(
+    extracted_dir: str,
+    output_rbxlx: str,
+    force: bool = False,
+    preserve_content: bool = False,
+) -> None:
     input_path = Path(extracted_dir)
     if not input_path.is_dir():
         print(f"Error: Directory not found: {extracted_dir}")
@@ -598,6 +618,8 @@ def import_rbxlx(extracted_dir: str, output_rbxlx: str, force: bool = False) -> 
     print(f"Importing changes from {extracted_dir} → existing {output_rbxlx}")
     if force:
         print("  (--force: mtime-win / clean-manifest skips disabled)")
+    if preserve_content:
+        print("  (--preserve-content: blank meta Content will not overwrite place values)")
 
     manifest = None
     rbxlx_mtime = None
@@ -617,7 +639,6 @@ def import_rbxlx(extracted_dir: str, output_rbxlx: str, force: bool = False) -> 
 
     referent_map, path_map = _build_instance_maps(root)
 
-    # --- Collect candidates (after dirty filter) ---
     candidates: list[dict[str, Any]] = []
     skipped_clean = 0
 
@@ -676,8 +697,6 @@ def import_rbxlx(extracted_dir: str, output_rbxlx: str, force: bool = False) -> 
             }
         )
 
-    # --- Drop redundant disk entries (do not import them) ---
-    # Prefer entries that map into the place, then non-uniquified names.
     by_ref: dict[str, dict[str, Any]] = {}
     by_uid: dict[str, dict[str, Any]] = {}
     path_keys_present = {c["path_key"] for c in candidates if c["path_key"]}
@@ -685,8 +704,6 @@ def import_rbxlx(extracted_dir: str, output_rbxlx: str, force: bool = False) -> 
     skipped_redundant = 0
 
     for c in candidates:
-        # Name_N leftover when bare Name is also a candidate and this entry
-        # has no distinct Referent of its own → skip as redundant disk file.
         is_uni, bare = _is_uniquified_path(c["path_key"])
         if is_uni and bare in path_keys_present and not c["ref"]:
             print(f"  · skip redundant disk entry {c['rel']} (Name_N leftover of {bare})")
@@ -701,7 +718,6 @@ def import_rbxlx(extracted_dir: str, output_rbxlx: str, force: bool = False) -> 
                     print(f"  · skip redundant disk entry {c['rel']} (same Referent as {prev['rel']})")
                     skipped_redundant += 1
                     continue
-                # Replace previous with this one; remove prev from kept
                 print(f"  · skip redundant disk entry {prev['rel']} (same Referent as {c['rel']})")
                 skipped_redundant += 1
                 kept = [k for k in kept if k is not prev]
@@ -732,11 +748,10 @@ def import_rbxlx(extracted_dir: str, output_rbxlx: str, force: bool = False) -> 
 
         kept.append(c)
 
-    # --- Apply kept candidates (each place Item at most once) ---
     updated = 0
     unchanged = 0
     skipped_no_match = 0
-    applied_items: set[int] = set()  # id(item)
+    applied_items: set[int] = set()
 
     for c in kept:
         meta = c["meta"]
@@ -761,7 +776,6 @@ def import_rbxlx(extracted_dir: str, output_rbxlx: str, force: bool = False) -> 
             skipped_redundant += 1
             continue
 
-        # Safety net: keep the UniqueId already on the place Item.
         existing_uid = _get_unique_id(item)
         if existing_uid is not None:
             meta = dict(meta)
@@ -769,12 +783,12 @@ def import_rbxlx(extracted_dir: str, output_rbxlx: str, force: bool = False) -> 
             props["UniqueId"] = {"type": "UniqueId", "value": existing_uid}
             meta["Properties"] = props
 
-        if not _needs_update(item, meta, source):
+        if not _needs_update(item, meta, source, preserve_content=preserve_content):
             unchanged += 1
             applied_items.add(item_id)
             continue
 
-        _apply_meta_to_item(item, meta, source=source)
+        _apply_meta_to_item(item, meta, source=source, preserve_content=preserve_content)
         applied_items.add(item_id)
         updated += 1
 
@@ -809,11 +823,8 @@ def main() -> None:
             "Import changes from a Verde extracted folder into an existing .rbxlx "
             "(or create the .rbxlx if it does not exist — full rebuild). "
             "CLI: verde-import. "
-            "Use --force to ignore mtime-win / clean-manifest skips. "
-            "Redundant on-disk entries (Name_N leftovers, shared Referent/UniqueId) "
-            "are skipped so they are not imported into the place. "
-            "Blank/broken meta Content values (e.g. old MeshId exports) do not "
-            "overwrite valid place values."
+            "Blank MeshId/Content in the export applies by default (VCS-correct). "
+            "Use --preserve-content only when recovering from older corrupted exports."
         )
     )
     parser.add_argument("extracted_dir", help="Path to extracted Verde folder")
@@ -830,12 +841,26 @@ def main() -> None:
             "Force consideration of all matching folder files, bypassing the "
             "manifest clean-check and mtime-win logic that would otherwise skip "
             "files older than the target .rbxlx. Content is still only written "
-            "when it actually differs. Redundant disk entries are still skipped. "
-            "Blank meta Content values still do not overwrite valid place values."
+            "when it actually differs. Redundant disk entries are still skipped."
+        ),
+    )
+    parser.add_argument(
+        "--preserve-content",
+        action="store_true",
+        help=(
+            "Recovery flag: do not overwrite non-blank place Content values "
+            "(MeshId, TextureID, etc.) with blank/broken meta from older exports "
+            "that lost Content/<url>. Default is off so intentional clears in the "
+            "export propagate to collaborators (correct version-control behaviour)."
         ),
     )
     args = parser.parse_args()
-    import_rbxlx(args.extracted_dir, args.output_rbxlx, force=args.force)
+    import_rbxlx(
+        args.extracted_dir,
+        args.output_rbxlx,
+        force=args.force,
+        preserve_content=args.preserve_content,
+    )
 
 
 if __name__ == "__main__":
