@@ -37,19 +37,12 @@ from typing import Any
 
 from attributes import decode_attributes
 from interesting import load_interesting_props
+from xml_props import sanitize_name, parse_children, parse_property_element, decode_tags_from_prop
 
 
 SCRIPT_EXTS = (".lua", ".local.lua", ".module.lua")
 
 _FS_CASE_INSENSITIVE = platform.system() in ("Darwin", "Windows")
-
-
-def sanitize_name(name: str) -> str:
-    invalid = '<>:"/\\|?*'
-    for char in invalid:
-        name = name.replace(char, "_")
-    name = name.strip()
-    return name or "Unnamed"
 
 
 def get_script_extension(class_name: str) -> str:
@@ -58,62 +51,6 @@ def get_script_extension(class_name: str) -> str:
     if class_name == "ModuleScript":
         return ".module.lua"
     return ".lua"
-
-
-def _parse_children(elem: ET.Element) -> dict[str, Any]:
-    children: dict[str, Any] = {}
-    for child in elem:
-        if len(child) == 0 and not child.attrib:
-            val: Any = child.text if child.text is not None else ""
-        else:
-            sub = _parse_children(child)
-            if child.attrib:
-                if not isinstance(sub, dict):
-                    sub = {"_value": sub} if sub else {}
-                sub = dict(sub)
-                sub["_attrs"] = dict(child.attrib)
-            val = sub if sub else (child.text if child.text is not None else "")
-
-        if child.tag in children:
-            existing = children[child.tag]
-            if not isinstance(existing, list):
-                children[child.tag] = [existing]
-            children[child.tag].append(val)
-        else:
-            children[child.tag] = val
-    return children
-
-
-def _parse_property_element(prop: ET.Element) -> dict[str, Any]:
-    tag = prop.tag
-    result: dict[str, Any] = {"type": tag}
-
-    if tag in (
-        "string",
-        "ProtectedString",
-        "bool",
-        "int",
-        "int64",
-        "float",
-        "double",
-        "token",
-        "BinaryString",
-        "Content",
-        "SharedString",
-        "Ref",
-        "UniqueId",
-        "BrickColor",
-    ):
-        result["value"] = prop.text if prop.text is not None else ""
-        return result
-
-    children = _parse_children(prop)
-    if children:
-        result["children"] = children
-    else:
-        result["value"] = prop.text if prop.text is not None else ""
-
-    return result
 
 
 def extract_properties(
@@ -133,7 +70,7 @@ def extract_properties(
         if not prop_name:
             continue
 
-        structured = _parse_property_element(prop)
+        structured = parse_property_element(prop)
         full[prop_name] = structured
 
         if prop_name == "Tags" and structured.get("type") == "BinaryString":
@@ -250,12 +187,10 @@ def _compute_keep_map(
         has_tag = bool(tag_filter) and _item_has_tag(item, tag_filter)
 
         if scripts_only and tag_filter:
-            # Keep if script path or tagged (or ancestor of either)
             keep[id(item)] = is_script or has_tag or has_kept_child
         elif tag_filter:
             keep[id(item)] = has_tag or has_kept_child
         else:
-            # scripts_only default
             keep[id(item)] = is_script or has_kept_child
 
     return keep
@@ -273,7 +208,6 @@ def _find_root_item(root: ET.Element, path: str) -> ET.Element | None:
     for i, part in enumerate(parts):
         found = None
         for it in current_list:
-            # Resolve name the same way as export
             flat, _, full, _ = extract_properties(it, set())
             name = _resolve_name(it, flat, full)
             if name == part or sanitize_name(name) == part:
@@ -370,7 +304,6 @@ def extract(
     skipped_count = 0
     PROGRESS_EVERY = 500
 
-    # Selective root: start from a single Item instead of all top-level Items
     start_items: list[ET.Element]
     if root_filter:
         found = _find_root_item(root, root_filter)
@@ -529,7 +462,6 @@ def extract(
     if pruned:
         print(f"  Empty dirs removed: {pruned}")
 
-    # Record selective filters for future import grafting
     if root_filter or tag_filter:
         partial = {
             "root": root_filter,
@@ -544,7 +476,6 @@ def extract(
         )
         print(f"  Partial   : {partial_dir / 'partial.json'}")
 
-    # Touched-file tracking for later import / verde-merge (mtime-win).
     try:
         from features.sync import write_manifest
 
