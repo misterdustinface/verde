@@ -33,8 +33,10 @@ never applied into the place:
   _N entry has no distinct Referent → treated as leftover and skipped.
 - A place Item is updated at most once per import run.
 
-When a matched place Item already has a UniqueId, that value is preserved
-(safety net). We do not invent or regenerate UniqueIds for disk duplicates.
+When a matched place Item already has a UniqueId, that value is preserved.
+When meta would replace a non-empty place property (e.g. MeshId Content) with
+a blank/empty value — common with older exports that lost Content/<url>
+children — the place value is kept so valid meshes are not wiped.
 
 Understands the full structured Properties map (all types) plus Tags and
 Attributes so that round-trips are as lossless as possible.
@@ -428,6 +430,57 @@ def _current_structured_props(item: ET.Element) -> dict[str, Any]:
     return full
 
 
+def _structured_is_blank(structured: Any) -> bool:
+    """True when a structured property has no meaningful value.
+
+    Covers plain empty text and Content/SharedString without a usable child
+    (e.g. missing or empty <url>) — the form older broken MeshId exports take.
+    """
+    if structured is None:
+        return True
+    if not isinstance(structured, dict):
+        return str(structured).strip() == ""
+    children = structured.get("children")
+    if isinstance(children, dict) and children:
+
+        def _child_blank(v: Any) -> bool:
+            if isinstance(v, dict):
+                if v.get("_value") is not None and str(v.get("_value")).strip() != "":
+                    return False
+                # attrs-only or nested empties
+                rest = {k: x for k, x in v.items() if k != "_attrs"}
+                if not rest:
+                    return True
+                return all(_child_blank(x) for x in rest.values())
+            if isinstance(v, list):
+                return all(_child_blank(x) for x in v)
+            return v is None or str(v).strip() == ""
+
+        return all(_child_blank(v) for v in children.values())
+    val = structured.get("value")
+    return val is None or str(val).strip() == ""
+
+
+def _merge_structured_props(
+    place_props: dict[str, Any],
+    meta_props: dict[str, Any],
+) -> dict[str, Any]:
+    """Overlay meta Properties onto place Properties for differential import.
+
+    Place is the base. Meta wins for keys it carries, except when meta would
+    replace a non-blank place value with a blank one. That protects MeshId /
+    TextureID / SoundId (and similar) when importing older exports whose Content
+    values were corrupted into empty strings.
+    """
+    merged = dict(place_props)
+    for key, meta_val in meta_props.items():
+        place_val = place_props.get(key)
+        if place_val is not None and not _structured_is_blank(place_val) and _structured_is_blank(meta_val):
+            continue
+        merged[key] = meta_val
+    return merged
+
+
 def _needs_update(
     item: ET.Element,
     meta: dict[str, Any],
@@ -455,9 +508,11 @@ def _needs_update(
     if meta_attrs != _get_attributes(item):
         return True
 
+    # Compare against the merged view so blank meta MeshIds do not force a write
+    place_props = _current_structured_props(item)
     meta_props = meta.get("Properties") or {}
-    current_props = _current_structured_props(item)
-    if meta_props != current_props:
+    merged_props = _merge_structured_props(place_props, meta_props)
+    if merged_props != place_props:
         return True
 
     special = {"ClassName", "Name", "Tags", "Attributes", "Properties", "Referent"}
@@ -467,7 +522,7 @@ def _needs_update(
             continue
         if not isinstance(val, (str, int, float, bool)):
             continue
-        cur = current_props.get(key)
+        cur = place_props.get(key)
         if cur is None:
             return True
         if isinstance(cur, dict) and "value" in cur:
@@ -490,6 +545,19 @@ def _apply_meta_to_item(
         item.set("name", str(meta["Name"]))
     if "Referent" in meta:
         item.set("referent", str(meta["Referent"]))
+
+    # Merge place Properties with meta. Blank/broken meta values (typical of
+    # older MeshId exports that lost Content/<url>) do not overwrite good
+    # place values. UniqueId on the place Item always wins.
+    place_props = _current_structured_props(item)
+    meta_props = dict(meta.get("Properties") or {})
+    merged = _merge_structured_props(place_props, meta_props)
+    existing_uid = _get_unique_id(item)
+    if existing_uid is not None:
+        merged["UniqueId"] = {"type": "UniqueId", "value": existing_uid}
+
+    meta = dict(meta)
+    meta["Properties"] = merged
 
     _clear_properties(item)
     add_properties(item, meta, source=source)
@@ -743,7 +811,9 @@ def main() -> None:
             "CLI: verde-import. "
             "Use --force to ignore mtime-win / clean-manifest skips. "
             "Redundant on-disk entries (Name_N leftovers, shared Referent/UniqueId) "
-            "are skipped so they are not imported into the place."
+            "are skipped so they are not imported into the place. "
+            "Blank/broken meta Content values (e.g. old MeshId exports) do not "
+            "overwrite valid place values."
         )
     )
     parser.add_argument("extracted_dir", help="Path to extracted Verde folder")
@@ -760,7 +830,8 @@ def main() -> None:
             "Force consideration of all matching folder files, bypassing the "
             "manifest clean-check and mtime-win logic that would otherwise skip "
             "files older than the target .rbxlx. Content is still only written "
-            "when it actually differs. Redundant disk entries are still skipped."
+            "when it actually differs. Redundant disk entries are still skipped. "
+            "Blank meta Content values still do not overwrite valid place values."
         ),
     )
     args = parser.parse_args()
