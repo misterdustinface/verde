@@ -78,6 +78,18 @@ local function coerce(value: any): any
 	return s
 end
 
+-- Shared name sanitiser used by dumpScripts (archive hierarchy) and
+-- instanceToRelPath / scriptRelPath / metaRelPath (Live Sync + export paths).
+-- Matches the Python xml_props.sanitize_name set of invalid filesystem chars
+-- plus null and whitespace normalisation so fallback restore paths stay
+-- consistent when OriginalFullName is absent.
+local function sanitizeName(name: string): string
+	local s = name:gsub('[<>:"/\\|?*\0]', "_")
+	s = s:gsub("%s+", " ")
+	s = s:match("^%s*(.-)%s*$") or s
+	return if s == "" then "Unnamed" else s
+end
+
 function Verde.search(options: SearchOptions): { Instance }
 	local results: { Instance } = {}
 	local root = options.root or game
@@ -219,10 +231,6 @@ function Verde.dumpScripts(options: DumpOptions?): (Folder, number)
 		end
 		return f
 	end
-	local function sanitize(name: string): string
-		local s = name:gsub("[/\\%z]", "_")
-		return if s == "" then "Unnamed" else s
-	end
 	local archiveRoot = Instance.new("Folder")
 	archiveRoot.Name = prefix .. os.date("%Y%m%d_%H%M%S")
 	archiveRoot.Parent = parentFolder
@@ -233,7 +241,7 @@ function Verde.dumpScripts(options: DumpOptions?): (Folder, number)
 		local pathParts: { string } = {}
 		local current: Instance? = scriptInstance
 		while current and current ~= game do
-			table.insert(pathParts, 1, sanitize(current.Name))
+			table.insert(pathParts, 1, sanitizeName(current.Name))
 			current = current.Parent
 		end
 		local parent: Instance = archiveRoot
@@ -407,13 +415,6 @@ function Verde.restoreScripts(options: RestoreOptions?): (number, number, number
 		end
 	end
 	return restored, created, skipped
-end
-
-local function sanitizeName(name: string): string
-	local s = name:gsub('[<>:"/\\|?*]', "_")
-	s = s:gsub("%s+", " ")
-	s = s:match("^%s*(.-)%s*$") or s
-	return if s == "" then "Unnamed" else s
 end
 
 function Verde.instanceToRelPath(inst: Instance): string
