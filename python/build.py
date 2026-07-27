@@ -25,6 +25,10 @@ considered for application (still only written when content actually differs
 via _needs_update). Useful when timestamps have drifted or the place was
 touched outside Verde.
 
+On differential apply, the UniqueId already present on the matched place Item
+is preserved (never overwritten from meta). This prevents "DM contains
+duplicate Unique ids" when Studio opens the result.
+
 Understands the full structured Properties map (all types) plus Tags and
 Attributes so that round-trips are as lossless as possible.
 
@@ -365,6 +369,17 @@ def _get_attributes(item: ET.Element) -> dict[str, Any]:
     return {}
 
 
+def _get_unique_id(item: ET.Element) -> str | None:
+    """Return the UniqueId property value already present on an Item, or None."""
+    props = item.find("Properties")
+    if props is None:
+        return None
+    for p in props:
+        if p.get("name") == "UniqueId" and p.text:
+            return p.text.strip()
+    return None
+
+
 def _current_structured_props(item: ET.Element) -> dict[str, Any]:
     full: dict[str, Any] = {}
     props_elem = item.find("Properties")
@@ -540,6 +555,17 @@ def import_rbxlx(extracted_dir: str, output_rbxlx: str, force: bool = False) -> 
             print(f"  · no match for {rel} (skip; will not auto-create yet)")
             skipped_no_match += 1
             continue
+
+        # Preserve the UniqueId already on the place Item. Overwriting it from
+        # folder meta can introduce a value that collides with another instance
+        # (especially under --force when applying older snapshots), causing
+        # Studio to refuse the file with "DM contains duplicate Unique ids".
+        existing_uid = _get_unique_id(item)
+        if existing_uid is not None:
+            meta = dict(meta)
+            props = dict(meta.get("Properties") or {})
+            props["UniqueId"] = {"type": "UniqueId", "value": existing_uid}
+            meta["Properties"] = props
 
         if not _needs_update(item, meta, source):
             unchanged += 1
