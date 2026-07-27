@@ -134,6 +134,14 @@ On Live Sync connect (and optionally on a lightweight periodic or on-demand “H
 - Surface a short human summary (“healed 7, ambiguous 2, left alone 3”) and never auto-delete or invent instances.
 - Keep the existing non-goals (no create/delete from disk) intact; this is only map + meta repair.
 
+### I2. Conflict markers (git-style) for offline merge when both sides dirty
+
+**Why**  
+Today’s mtime-win silently prefers one side when both the folder and the `.rbxlx` have changed the same logical content. Version-control users need an explicit conflict signal so they can choose which version to keep (or merge by hand) instead of losing the other edit.
+
+**Rough idea**  
+When `verde-merge` (or a forced import) detects that a tracked file is dirty on both sides relative to the last manifest, write a sibling `*.conflict` (or annotate the Source / meta with classic <<<< / ==== / >>>> markers) and exit non-zero. Add optional `--prefer-folder` / `--prefer-place` to auto-resolve in one direction. Keep the current pure mtime-win behaviour as the default for non-interactive scripts.
+
 ### SIMPLISTIC
 
 ### S1. Machine-readable `--json` output for `verde-search`, `verde-tags`, and `verde-set`/`verde-replace`
@@ -147,6 +155,27 @@ The current human-oriented text output is fine for interactive use but awkward f
 - Keep the default human output unchanged.
 - Minimal surface: only the print/format paths in `features/search.py`, `features/tags.py`, and `features/set_replace.py`; no new dependencies.
 - Document the schema briefly in `--help` and SYSTEM_OVERVIEW.
+
+### S2. `--dry-run` for `verde-import`
+
+**Why**  
+Symmetric with the existing `--dry-run` on `verde-merge`. Lets a user (or CI) preview exactly which instances would be updated without touching the target `.rbxlx` or the manifest.
+
+**Scope**  
+- Add `--dry-run` to `build.main` / `import_rbxlx`.
+- When set, perform matching + `_needs_update` checks and print the list of paths that would be applied, then exit without writing the place file or refreshing the manifest.
+- Zero behavioural change when the flag is absent.
+
+### S3. `--verbose` / `--quiet` for import and merge
+
+**Why**  
+Default summary lines are good for interactive use; scripts and large places benefit from either more detail (every applied path) or silence.
+
+**Scope**  
+- Add mutually exclusive `--verbose` / `--quiet` (or a single `-v`/`-q`) to `verde-import` and `verde-merge`.
+- Verbose: list every path that was (or would be) applied.
+- Quiet: suppress the “Applied N …” / “Nothing to merge” banners; still emit real errors on stderr.
+- Minimal changes to the existing print sites in `build.py` and `features/sync.py`.
 
 ---
 

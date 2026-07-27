@@ -27,6 +27,9 @@ Parses a Roblox place file into a hierarchy of folders + `.robloxmeta.json` (and
 **Description**  
 Applies an extracted folder tree back into an existing `.rbxlx` (or creates a new one). Matching prefers Referent / UniqueId from meta, then hierarchy path. Re-emits Source, Properties, Tags, and Attributes. Unmatched place instances are left untouched. Falls back to full rebuild when the target file is missing. `verde-merge` is the same entry point with manifest-aware dirty set + mtime-win conflict rule.
 
+**`--force`**  
+Bypasses the clean-manifest / mtime-win skip logic. Every matching folder entry is considered for application even when the on-disk file is older than the target `.rbxlx` or matches the recorded hash+mtime. Content is still only written when `_needs_update` detects a real difference. Manifest is refreshed after a successful run.
+
 **Key components**  
 - `python/build.py`
 - `python/features/sync.py` (manifest helpers, mtime-win)
