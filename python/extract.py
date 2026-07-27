@@ -19,6 +19,8 @@ search, and edit.
   - Paths that already exist on disk from a previous export are *reused* (no new
     digit suffix). Content is compared: identical files are left untouched;
     differing files are overwritten by default, or prompted with --interactive.
+  - After re-export, stale uniquified siblings (Name_N left when the collision
+    disappeared) are removed so the tree does not accumulate orphans.
 - After a successful export a .verde/manifest.json is written so later merge/import
   can skip unchanged files (simple adler32 hash + mtime).
 - Selective: --root PATH and/or --tag TAG limit the exported tree.
@@ -30,6 +32,8 @@ import argparse
 import base64
 import json
 import platform
+import re
+import shutil
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -250,6 +254,56 @@ def _prune_empty_dirs(root: Path) -> int:
     return removed
 
 
+def _cleanup_orphaned_uniquified(root: Path, written: dict[Path, set[str]]) -> int:
+    """Remove stale Name_N siblings left from a prior collision that no longer exists.
+
+    When path-reuse writes a survivor back to the bare Name, the old Name_2
+    (file or dir) is otherwise left behind because empty-dir prune only deletes
+    empty directories. Only remove entries whose stem matches the uniquify
+    pattern and whose bare base was claimed this run.
+    """
+    removed = 0
+    for parent, used in written.items():
+        if not parent.is_dir():
+            continue
+        try:
+            entries = list(parent.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            stem = entry.name
+            for ext in SCRIPT_EXTS + (".robloxmeta.json",):
+                if entry.name.endswith(ext):
+                    stem = entry.name[: -len(ext)]
+                    break
+            # Already used this run → keep
+            if _FS_CASE_INSENSITIVE:
+                if any(stem.casefold() == u.casefold() for u in used):
+                    continue
+            else:
+                if stem in used:
+                    continue
+            m = re.match(r"^(.+)_([0-9]+)$", stem)
+            if not m:
+                continue
+            base = m.group(1)
+            if _FS_CASE_INSENSITIVE:
+                base_used = any(base.casefold() == u.casefold() for u in used)
+            else:
+                base_used = base in used
+            if not base_used:
+                continue
+            try:
+                if entry.is_dir():
+                    shutil.rmtree(entry)
+                else:
+                    entry.unlink()
+                removed += 1
+            except OSError:
+                pass
+    return removed
+
+
 def _confirm_overwrite(path: Path) -> bool:
     while True:
         try:
@@ -325,7 +379,8 @@ def extract(
         if tag_filter:
             print(f"  Selective tag: {tag_filter}")
 
-    used_names: dict[Path, set[str]] = {}
+    used_names: dict[Path, set[str]] = {}  # keys for uniqueness (casefolded when needed)
+    written_names: dict[Path, set[str]] = {}  # actual names assigned this run
 
     stack: list[tuple[ET.Element, Path]] = []
     for top in reversed(start_items):
@@ -356,6 +411,7 @@ def extract(
             name = f"{base_name}_{counter}"
             key = name.casefold() if _FS_CASE_INSENSITIVE else name
         claimed.add(key)
+        written_names.setdefault(current, set()).add(name)
 
         full_path = current / name
         instance_count += 1
@@ -441,6 +497,10 @@ def extract(
             stack.append((child, full_path))
 
     pruned = _prune_empty_dirs(out)
+    orphans = _cleanup_orphaned_uniquified(out, written_names)
+    if orphans:
+        # Removing non-empty orphans can leave newly-empty parents; prune again.
+        pruned += _prune_empty_dirs(out)
 
     mode_bits = []
     if scripts_only:
@@ -461,6 +521,8 @@ def extract(
         print(f"  Skipped   : {skipped_count} (interactive)")
     if pruned:
         print(f"  Empty dirs removed: {pruned}")
+    if orphans:
+        print(f"  Orphaned uniquified removed: {orphans}")
 
     if root_filter or tag_filter:
         partial = {
