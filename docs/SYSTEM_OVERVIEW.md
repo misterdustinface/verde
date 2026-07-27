@@ -112,6 +112,7 @@ verde-set extracted/ --prop CastShadow --to false --tag NoShadow
 verde-tags extracted/ --list
 
 verde-import code/ MyPlace.rbxlx    # on-disk only; does not refresh open Studio
+verde-import code/ MyPlace.rbxlx --force   # ignore mtime-win / clean skips
 verde-merge code/ MyPlace.rbxlx     # offline dirty push/pull via manifest + mtime-win
 verde-merge code/ MyPlace.rbxlx --dry-run
 ```
@@ -119,7 +120,7 @@ verde-merge code/ MyPlace.rbxlx --dry-run
 ### Flags (summary)
 
 **`verde-export`:** `--all`, `--interesting`, `--interactive`  
-**`verde-import`:** target path; creates file if missing  
+**`verde-import`:** target path; creates file if missing; `--force` (bypass mtime-win / clean-manifest skips)  
 **`verde-merge`:** `--dry-run`  
 **`verde-sync`:** extracted folder path only (port hidden)  
 **`verde-search` / `verde-set` / `verde-tags`:** see `--help`
