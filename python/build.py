@@ -16,6 +16,12 @@ verde-import is the command:
   an existing place without losing non-script content when using scripts-only
   extracts.
 
+When a folder entry has no match in the place but its parent hierarchy path
+already exists, a new Item is created under that parent (ClassName / Name /
+Referent / Source / Tags / Attributes from meta). UniqueId is omitted so
+Studio assigns a fresh one. If the parent path is also missing the entry is
+still skipped.
+
 When a .verde/manifest.json is present, files whose simple numeric hash + mtime
 match the recorded entry are skipped early (and mtime-wins is applied against
 the .rbxlx). After a successful import the manifest is refreshed.
@@ -583,6 +589,37 @@ def _apply_meta_to_item(
     add_properties(item, meta, source=source)
 
 
+def _create_item_from_meta(
+    parent: ET.Element,
+    meta: dict[str, Any],
+    source: str | None = None,
+    *,
+    leaf_name: str | None = None,
+) -> ET.Element:
+    """Create a new Item under parent from folder meta (auto-create path).
+
+    UniqueId is deliberately omitted so Studio assigns a fresh one on open.
+    Referent from meta is kept so subsequent imports can match by Referent.
+    """
+    class_name = str(meta.get("ClassName") or ("ModuleScript" if source is not None else "Folder"))
+    name = str(meta.get("Name") or leaf_name or "Unnamed")
+
+    item = ET.SubElement(parent, "Item")
+    item.set("class", class_name)
+    item.set("name", name)
+    if "Referent" in meta and meta["Referent"]:
+        item.set("referent", str(meta["Referent"]))
+
+    # Strip UniqueId so Studio owns identity for brand-new instances.
+    create_meta = dict(meta)
+    props = dict(create_meta.get("Properties") or {})
+    props.pop("UniqueId", None)
+    create_meta["Properties"] = props
+
+    add_properties(item, create_meta, source=source)
+    return item
+
+
 def _prefer_candidate(
     a: dict[str, Any],
     b: dict[str, Any],
@@ -769,8 +806,12 @@ def import_rbxlx(
 
         kept.append(c)
 
+    # Parents before children so auto-create can attach under just-created ancestors.
+    kept.sort(key=lambda c: c["path_key"].count("/"))
+
     # --- Apply kept candidates (each place Item at most once) ---
     updated = 0
+    created = 0
     unchanged = 0
     skipped_no_match = 0
     applied_items: set[int] = set()  # id(item)
@@ -788,7 +829,38 @@ def import_rbxlx(
             item = path_map[path_key]
 
         if item is None:
-            print(f"  · no match for {c['rel']} (skip; will not auto-create yet)")
+            # Auto-create under an existing parent when possible.
+            parent_item: ET.Element | None = None
+            leaf_name = ""
+            if path_key:
+                parts = path_key.split("/")
+                leaf_name = parts[-1]
+                parent_path = "/".join(parts[:-1]) if len(parts) > 1 else ""
+                if parent_path == "":
+                    # Top-level under <roblox> root
+                    parent_item = root
+                elif parent_path in path_map:
+                    parent_item = path_map[parent_path]
+
+            if parent_item is not None:
+                new_item = _create_item_from_meta(
+                    parent_item, meta, source=source, leaf_name=leaf_name or None
+                )
+                # Register so later candidates can match / attach under this one.
+                if path_key:
+                    path_map[path_key] = new_item
+                new_ref = new_item.get("referent")
+                if new_ref:
+                    referent_map[new_ref] = new_item
+                applied_items.add(id(new_item))
+                created += 1
+                print(f"  · created {c['rel']} under {'<root>' if parent_item is root else parent_path}")
+                continue
+
+            print(
+                f"  · no match for {c['rel']} "
+                f"(parent path missing; cannot auto-create)"
+            )
             skipped_no_match += 1
             continue
 
@@ -815,10 +887,15 @@ def import_rbxlx(
         applied_items.add(item_id)
         updated += 1
 
-    if updated:
+    if updated or created:
         ET.indent(tree, space="  ")
         tree.write(str(out_path), encoding="utf-8", xml_declaration=True)
-        print(f"✓ Applied {updated} instance update(s) into {output_rbxlx}")
+        parts = []
+        if updated:
+            parts.append(f"{updated} update(s)")
+        if created:
+            parts.append(f"{created} created")
+        print(f"✓ Applied {', '.join(parts)} into {output_rbxlx}")
     else:
         print(f"✓ No content changes needed in {output_rbxlx}")
 
@@ -829,7 +906,7 @@ def import_rbxlx(
     if skipped_redundant:
         print(f"  ({skipped_redundant} redundant disk entry(ies) skipped — Name_N / shared Referent or UniqueId)")
     if skipped_no_match:
-        print(f"  ({skipped_no_match} folder entries had no matching instance in the place)")
+        print(f"  ({skipped_no_match} folder entries had no matching instance and no creatable parent)")
     print("Open the place in Studio (or re-open) to see the changes.")
 
     try:
@@ -847,7 +924,9 @@ def main() -> None:
             "(or create the .rbxlx if it does not exist — full rebuild). "
             "CLI: verde-import. "
             "Blank MeshId/Content in the export applies by default (VCS-correct). "
-            "Use --preserve-content only when recovering from older corrupted exports."
+            "Use --preserve-content only when recovering from older corrupted exports. "
+            "New folder entries whose parent path already exists in the place are "
+            "auto-created (UniqueId left for Studio to assign)."
         )
     )
     parser.add_argument("extracted_dir", help="Path to extracted Verde folder")
