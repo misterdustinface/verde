@@ -1,4 +1,4 @@
-"""Differential import must not wipe valid place MeshId with blank meta from old exports."""
+"""Differential import: default VCS semantics vs --preserve-content recovery."""
 
 from __future__ import annotations
 
@@ -9,14 +9,13 @@ from pathlib import Path
 import build
 
 
-def test_blank_meta_meshid_does_not_wipe_place(tmp_path: Path):
-    # Place has a good MeshId (Content + url)
-    place_xml = """<?xml version="1.0" encoding="utf-8"?>
+def _write_place(tmp_path: Path, mesh_url: str = "rbxassetid://111222333") -> Path:
+    place_xml = f"""<?xml version="1.0" encoding="utf-8"?>
 <roblox version="4">
   <Item class="MeshPart" name="MyMesh" referent="RBX1">
     <Properties>
       <string name="Name">MyMesh</string>
-      <Content name="MeshId"><url>rbxassetid://111222333</url></Content>
+      <Content name="MeshId"><url>{mesh_url}</url></Content>
       <bool name="Anchored">true</bool>
     </Properties>
   </Item>
@@ -24,9 +23,10 @@ def test_blank_meta_meshid_does_not_wipe_place(tmp_path: Path):
 """
     place = tmp_path / "place.rbxlx"
     place.write_text(place_xml, encoding="utf-8")
+    return place
 
-    # Older export meta: MeshId corrupted into empty value (pre Content/url fix)
-    folder = tmp_path / "extracted"
+
+def _write_blank_mesh_meta(folder: Path) -> None:
     mesh_dir = folder / "MyMesh"
     mesh_dir.mkdir(parents=True)
     meta = {
@@ -41,32 +41,43 @@ def test_blank_meta_meshid_does_not_wipe_place(tmp_path: Path):
     }
     (mesh_dir / ".robloxmeta.json").write_text(json.dumps(meta), encoding="utf-8")
 
-    build.import_rbxlx(str(folder), str(place), force=True)
+
+def test_default_blank_meta_meshid_applies(tmp_path: Path):
+    """VCS-correct: intentional empty MeshId in export clears the place MeshId."""
+    place = _write_place(tmp_path)
+    folder = tmp_path / "extracted"
+    _write_blank_mesh_meta(folder)
+
+    build.import_rbxlx(str(folder), str(place), force=True, preserve_content=False)
 
     tree = ET.parse(place)
     mesh_id = tree.find(".//Content[@name='MeshId']")
     assert mesh_id is not None
     url = mesh_id.find("url")
+    # Blank applied: no url child / empty
+    assert url is None or not (url.text or "").strip()
+    # Other meta still applies
+    anchored = tree.find(".//bool[@name='Anchored']")
+    assert anchored is not None and anchored.text == "false"
+
+
+def test_preserve_content_keeps_place_meshid(tmp_path: Path):
+    """Recovery: --preserve-content refuses blank meta wipe of good place MeshId."""
+    place = _write_place(tmp_path, "rbxassetid://111222333")
+    folder = tmp_path / "extracted"
+    _write_blank_mesh_meta(folder)
+
+    build.import_rbxlx(str(folder), str(place), force=True, preserve_content=True)
+
+    tree = ET.parse(place)
+    url = tree.find(".//Content[@name='MeshId']/url")
     assert url is not None and url.text == "rbxassetid://111222333"
-    # Non-blank meta still applies
     anchored = tree.find(".//bool[@name='Anchored']")
     assert anchored is not None and anchored.text == "false"
 
 
 def test_nonblank_meta_meshid_still_applies(tmp_path: Path):
-    place_xml = """<?xml version="1.0" encoding="utf-8"?>
-<roblox version="4">
-  <Item class="MeshPart" name="MyMesh" referent="RBX1">
-    <Properties>
-      <string name="Name">MyMesh</string>
-      <Content name="MeshId"><url>rbxassetid://111</url></Content>
-    </Properties>
-  </Item>
-</roblox>
-"""
-    place = tmp_path / "place.rbxlx"
-    place.write_text(place_xml, encoding="utf-8")
-
+    place = _write_place(tmp_path, "rbxassetid://111")
     folder = tmp_path / "extracted"
     mesh_dir = folder / "MyMesh"
     mesh_dir.mkdir(parents=True)
@@ -83,7 +94,7 @@ def test_nonblank_meta_meshid_still_applies(tmp_path: Path):
     }
     (mesh_dir / ".robloxmeta.json").write_text(json.dumps(meta), encoding="utf-8")
 
-    build.import_rbxlx(str(folder), str(place), force=True)
+    build.import_rbxlx(str(folder), str(place), force=True, preserve_content=False)
 
     tree = ET.parse(place)
     url = tree.find(".//Content[@name='MeshId']/url")
