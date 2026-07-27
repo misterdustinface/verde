@@ -20,6 +20,11 @@ When a .verde/manifest.json is present, files whose simple numeric hash + mtime
 match the recorded entry are skipped early (and mtime-wins is applied against
 the .rbxlx). After a successful import the manifest is refreshed.
 
+--force bypasses the clean / mtime-win skips so every matching folder entry is
+considered for application (still only written when content actually differs
+via _needs_update). Useful when timestamps have drifted or the place was
+touched outside Verde.
+
 Understands the full structured Properties map (all types) plus Tags and
 Attributes so that round-trips are as lossless as possible.
 
@@ -440,7 +445,7 @@ def _apply_meta_to_item(
     add_properties(item, meta, source=source)
 
 
-def import_rbxlx(extracted_dir: str, output_rbxlx: str) -> None:
+def import_rbxlx(extracted_dir: str, output_rbxlx: str, force: bool = False) -> None:
     input_path = Path(extracted_dir)
     if not input_path.is_dir():
         print(f"Error: Directory not found: {extracted_dir}")
@@ -452,6 +457,8 @@ def import_rbxlx(extracted_dir: str, output_rbxlx: str) -> None:
         return
 
     print(f"Importing changes from {extracted_dir} → existing {output_rbxlx}")
+    if force:
+        print("  (--force: mtime-win / clean-manifest skips disabled)")
 
     manifest = None
     rbxlx_mtime = None
@@ -510,7 +517,7 @@ def import_rbxlx(extracted_dir: str, output_rbxlx: str) -> None:
                     pass
             path_key = str((rel.parent / base_for_script)).replace("\\", "/")
 
-        if manifest is not None and is_file_dirty is not None:
+        if not force and manifest is not None and is_file_dirty is not None:
             any_dirty = False
             for r in related_rels:
                 if is_file_dirty(input_path, r, manifest, rbxlx_mtime=rbxlx_mtime):
@@ -569,7 +576,8 @@ def main() -> None:
         description=(
             "Import changes from a Verde extracted folder into an existing .rbxlx "
             "(or create the .rbxlx if it does not exist — full rebuild). "
-            "CLI: verde-import."
+            "CLI: verde-import. "
+            "Use --force to ignore mtime-win / clean-manifest skips."
         )
     )
     parser.add_argument("extracted_dir", help="Path to extracted Verde folder")
@@ -579,8 +587,18 @@ def main() -> None:
         default="RebuiltPlace.rbxlx",
         help="Target .rbxlx path (created if missing; updated in place if present)",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Force consideration of all matching folder files, bypassing the "
+            "manifest clean-check and mtime-win logic that would otherwise skip "
+            "files older than the target .rbxlx. Content is still only written "
+            "when it actually differs."
+        ),
+    )
     args = parser.parse_args()
-    import_rbxlx(args.extracted_dir, args.output_rbxlx)
+    import_rbxlx(args.extracted_dir, args.output_rbxlx, force=args.force)
 
 
 if __name__ == "__main__":
