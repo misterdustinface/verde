@@ -50,9 +50,24 @@ def parse_children(elem: ET.Element) -> dict[str, Any]:
 
 
 def parse_property_element(prop: ET.Element) -> dict[str, Any]:
-    """Parse a single <Properties> child into the structured {type, value|children} form."""
+    """Parse a single <Properties> child into the structured {type, value|children} form.
+
+    Simple scalar types are stored as {type, value}. Types that may carry child
+    elements (notably Content with a <url> child for MeshId / TextureID) keep
+    the children structure when present so MeshParts and similar round-trip.
+    """
     tag = prop.tag
     result: dict[str, Any] = {"type": tag}
+
+    # Content / SharedString / Ref often use child elements (e.g. <url>…</url>)
+    # in modern Studio XML. Prefer children when present so MeshId is not lost.
+    if tag in ("Content", "SharedString", "Ref"):
+        children = parse_children(prop)
+        if children:
+            result["children"] = children
+            return result
+        result["value"] = prop.text if prop.text is not None else ""
+        return result
 
     if tag in (
         "string",
@@ -64,9 +79,6 @@ def parse_property_element(prop: ET.Element) -> dict[str, Any]:
         "double",
         "token",
         "BinaryString",
-        "Content",
-        "SharedString",
-        "Ref",
         "UniqueId",
         "BrickColor",
     ):
