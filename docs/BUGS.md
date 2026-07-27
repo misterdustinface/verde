@@ -22,49 +22,42 @@ When Open issues is empty, contains only “None currently.”, or is sparse (ro
 
 ## Open issues
 
-### 1. Silent `bridgePost` failures in the plugin (Live Sync Studio→folder)
-
-`pushInstanceToBridge` calls `Verde.bridgePost("/push", …)` and ignores the success/error return value. When the bridge is down, the HTTP request fails, or the payload is rejected, the plugin continues without updating the status line. Studio→folder Source/meta edits are therefore lost until the next poll cycle (or forever if the user never notices).
-
-**Impact**  
-Silent data loss for Live Sync in the Studio→folder direction.
-
-### 2. Orphaned uniquified paths left on disk after re-export
+### 1. Orphaned uniquified paths left on disk after re-export
 
 When two siblings share a Name (or case-fold on Darwin/Windows), extract writes `Name` + `Name_2`. On a later re-export, if the colliding sibling is gone, path-reuse writes the survivor back to the bare `Name` path. The old `Name_2` directory/file is never removed because empty-dir prune only deletes empty directories. Over time the extracted tree accumulates stale uniquified leftovers.
 
 **Impact**  
 Disk clutter; potential confusion for users and for tools that walk the tree; residual files can be picked up by later imports if paths are ambiguous.
 
-### 3. Luau dump/restore name sanitisation vs `OriginalFullName` mismatch on fallback paths
+### 2. Luau dump/restore name sanitisation vs `OriginalFullName` mismatch on fallback paths
 
 `dumpScripts` builds the archive hierarchy with a limited sanitiser (`[/\\%z]` → `_`). The preferred restore path uses the original `OriginalFullName` attribute. When that attribute is missing or empty, restore falls back to a relative path derived from the sanitised archive names. Names containing the sanitised characters therefore restore to the wrong hierarchy location.
 
 **Impact**  
 Incorrect restore location (or skipped restore) for scripts whose Names contain `/`, `\\`, or null.
 
-### 4. Plugin: no user feedback when `ChangeHistoryService:TryBeginRecording` returns nil
+### 3. Plugin: no user feedback when `ChangeHistoryService:TryBeginRecording` returns nil
 
 Several plugin actions (Set/Replace, Rename tag, Restore scripts, Live Sync apply) call `TryBeginRecording`. When it returns `nil` (playtest mode, concurrent recording, etc.) the action still proceeds but no undo waypoint is created and the user receives no status-line indication.
 
 **Impact**  
 Silent loss of undo history; user may believe a change is undoable when it is not.
 
-### 5. Tags stored as SharedString are not decoded on extract
+### 4. Tags stored as SharedString are not decoded on extract
 
 `extract.py` only decodes the Tags property when its type is BinaryString, string, or ProtectedString. When Tags appears as a SharedString (rare but legal in some place formats), the value stays in the full Properties map and `meta["Tags"]` remains empty. Rebuild therefore does not re-emit a proper Tags BinaryString.
 
 **Impact**  
 Tags are lost on a round-trip for places that use the SharedString form.
 
-### 6. Fragile `interesting.py` property-name extraction
+### 5. Fragile `interesting.py` property-name extraction
 
 The interesting-properties list is extracted from the Luau source with a simple regex that matches double-quoted strings. Any future double-quoted string that is not a property name (comments, string literals inside the module, etc.) will pollute the list, and legitimate property names written with single quotes or concatenation will be missed.
 
 **Impact**  
 Incorrect or incomplete “interesting” flatten set; search/set surface becomes unreliable if the Luau source changes style.
 
-### 7. Child order not preserved on Python import
+### 6. Child order not preserved on Python import
 
 `build.py` / import walks the filesystem with `iterdir()`, whose order is not guaranteed and is typically sorted. Roblox instance child order is therefore not restored. Usually harmless for scripts, but prevents byte-identical round-trips and can affect order-sensitive behaviour (UI lists, some collection patterns).
 
@@ -118,6 +111,7 @@ These correctness problems were fixed during development and are no longer prese
 10. Live Sync `BridgeState.write_file` (Studio→folder) now calls `write_manifest` and reloads `self.manifest` after updating the in-memory known map (mirrors `mark_applied`). Previously the on-disk manifest stayed stale, so a just-pushed file immediately looked dirty again and could produce echo noise / status flicker. Fixed in PR #8; docs update completed here.
 11. On Darwin/Windows, `_build_instance_maps` in `build.py` now applies the same casefold uniqueness as `extract.py` when constructing the hierarchy path map. Previously a case-only sibling collision (Foo / foo → Foo + foo_2 on disk) produced a path_map key that could not match the on-disk `foo_2`, causing silent skip of the update on differential import. Fixed here.
 12. `Verde.dumpScripts` / `restoreScripts` no longer corrupt tags that contain commas. Tags are now stored as a JSON array via `HttpService:JSONEncode`; restore prefers JSONDecode and falls back to the legacy comma-split for older ScriptDump_* archives. Offline Python path was already safe (null-byte BinaryString).
+13. Silent `bridgePost` failures in the plugin (Live Sync Studio→folder). `pushInstanceToBridge` previously ignored the success/error return of `Verde.bridgePost("/push", …)`. Failures are now surfaced via `setLiveStatus` + `diagnoseBridgeFailure` with an explicit note that the last Source/meta edit may not have reached disk; `liveOn` remains true so the poll loop can recover.
 
 ---
 
