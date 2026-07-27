@@ -25,9 +25,13 @@ considered for application (still only written when content actually differs
 via _needs_update). Useful when timestamps have drifted or the place was
 touched outside Verde.
 
-On differential apply, the UniqueId already present on the matched place Item
-is preserved (never overwritten from meta). This prevents "DM contains
-duplicate Unique ids" when Studio opens the result.
+On differential apply:
+- The UniqueId already present on the matched place Item is preserved (never
+  overwritten from meta).
+- When the place Item has no UniqueId, the meta's UniqueId is emitted only if
+  it is not already used by another instance in the place (otherwise it is
+  dropped). This prevents "DM contains duplicate Unique ids" even when on-disk
+  Name / Name_2 leftovers share the same UniqueId value in their metas.
 
 Understands the full structured Properties map (all types) plus Tags and
 Attributes so that round-trips are as lossless as possible.
@@ -380,6 +384,25 @@ def _get_unique_id(item: ET.Element) -> str | None:
     return None
 
 
+def _collect_unique_ids(root: ET.Element) -> set[str]:
+    """Walk the place tree and return the set of all UniqueId values currently present."""
+    used: set[str] = set()
+
+    def walk(item: ET.Element) -> None:
+        if item.tag != "Item":
+            return
+        uid = _get_unique_id(item)
+        if uid:
+            used.add(uid)
+        for child in item:
+            if child.tag == "Item":
+                walk(child)
+
+    for top in root.findall("Item"):
+        walk(top)
+    return used
+
+
 def _current_structured_props(item: ET.Element) -> dict[str, Any]:
     full: dict[str, Any] = {}
     props_elem = item.find("Properties")
@@ -492,6 +515,7 @@ def import_rbxlx(extracted_dir: str, output_rbxlx: str, force: bool = False) -> 
     root = tree.getroot()
 
     referent_map, path_map = _build_instance_maps(root)
+    used_uids = _collect_unique_ids(root)
 
     updated = 0
     unchanged = 0
@@ -556,16 +580,33 @@ def import_rbxlx(extracted_dir: str, output_rbxlx: str, force: bool = False) -> 
             skipped_no_match += 1
             continue
 
-        # Preserve the UniqueId already on the place Item. Overwriting it from
-        # folder meta can introduce a value that collides with another instance
-        # (especially under --force when applying older snapshots), causing
-        # Studio to refuse the file with "DM contains duplicate Unique ids".
+        # UniqueId safety for differential import:
+        # 1. Prefer the UniqueId already on the place Item (never overwrite from meta).
+        # 2. If the place Item has none, only emit the meta's UniqueId when it is not
+        #    already used by another instance. This closes the residual gap when
+        #    on-disk Name / Name_2 leftovers share the same UniqueId in their metas.
+        meta = dict(meta)
+        props = dict(meta.get("Properties") or {})
         existing_uid = _get_unique_id(item)
+
         if existing_uid is not None:
-            meta = dict(meta)
-            props = dict(meta.get("Properties") or {})
             props["UniqueId"] = {"type": "UniqueId", "value": existing_uid}
-            meta["Properties"] = props
+        else:
+            meta_uid = None
+            structured = props.get("UniqueId")
+            if isinstance(structured, dict):
+                meta_uid = structured.get("value")
+            elif isinstance(structured, str):
+                meta_uid = structured
+            if isinstance(meta_uid, str):
+                meta_uid = meta_uid.strip()
+            if meta_uid and meta_uid in used_uids:
+                # Would create a duplicate → drop UniqueId rather than collide.
+                props.pop("UniqueId", None)
+            elif meta_uid:
+                used_uids.add(meta_uid)
+
+        meta["Properties"] = props
 
         if not _needs_update(item, meta, source):
             unchanged += 1
