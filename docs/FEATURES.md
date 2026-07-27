@@ -14,8 +14,11 @@ Planned work lives in `TODO_FEATURES.md`. Defects live in `BUGS.md`.
 **Description**  
 Parses a Roblox place file into a hierarchy of folders + `.robloxmeta.json` (and script source files). Default is scripts-only (only paths leading to Script/LocalScript/ModuleScript); `--all` exports the full instance tree. Empty directories are pruned. Existing on-disk paths are reused on re-export; content is compared so identical files are left untouched (overwrite on diff, or `--interactive` prompt). Sibling Name collisions are uniquified within a run; case-insensitive uniqueness is enforced on Darwin/Windows to prevent silent overwrites. Name is taken from the Name property (preferred) or Item@name attribute. After export a `.verde/manifest.json` (adler32 + mtime) is written for later merge/import skipping.
 
+**Selective export**  
+`--root PATH` (dot-separated Names, e.g. `ServerScriptService` or `Workspace.MyModel`) starts the export from that instance as the top of the output tree. `--tag TAG` keeps only instances that carry the tag (or ancestors of tagged instances) so hierarchy is preserved. Both combine with the scripts-only keep map. A `.verde/partial.json` records the filter for future import grafting.
+
 **Key components**  
-- `python/extract.py` (iterative stack walk + progress, keep-map, prune)
+- `python/extract.py` (iterative stack walk + progress, keep-map, prune, selective root/tag)
 - `python/attributes.py` (AttributesSerialize decode)
 - `python/interesting.py` + `luau/interesting_properties.luau`
 
@@ -115,7 +118,14 @@ Read-only command that answers “which files are dirty?” and “is the Live S
 **Key components**  
 - `python/features/status.py` (`verde-status`)
 
-### 13. Interactive case disambiguation for set/replace and tags
+### 13. Selective / partial extract (`--root` / `--tag`)
+
+**Description**  
+Foundation for partial place exports. `--root PATH` limits the export to a named subtree; `--tag TAG` keeps tagged instances and their ancestor chain. Writes `.verde/partial.json` so a future import can graft the partial tree back. Import-side grafting is still residual work (see TODO).
+
+**Key components**  
+- `python/extract.py`
+### 14. Interactive case disambiguation for set/replace and tags
 
 **Description**  
 When a case-insensitive discovery filter yields multiple distinct original-cased values (properties or tags), the CLI presents a short numbered list (value + instance count) and, under `--interactive` or a TTY, lets the user pick which exact value(s) to act on. Non-interactive multi-variant runs exit non-zero with the list so scripts remain deterministic. The Studio plugin lists the same variants in the status line when a replace finds zero exact matches, so the user can copy an exact value back into the input field. Final mutation always uses exact case (Roblox semantics).

@@ -14,11 +14,13 @@ Ordered per operator preference. (Items 1–2 from the previous list shipped; re
 **Description**  
 Extract or rebuild only a subtree (e.g. everything under `ServerScriptService` or a single tagged model) instead of the whole place.
 
-**Recommendations & options**
-- Add `--root ClassName.Name` or `--tag SomeTag` filters to `verde-export` and `verde-import`.
-- On export, emit a smaller folder tree plus a manifest that records the original attachment point.
-- On import, allow grafting the partial tree back into an existing `.rbxlx` (or into a previously extracted full tree).
-- Reduces turnaround time for large places when only a few systems are being edited.
+**Shipped (export foundation)**  
+- `verde-export --root PATH` and `--tag TAG` on the export path.
+- `.verde/partial.json` records the filter.
+
+**Still open**  
+- Import-side grafting of a partial tree back into an existing `.rbxlx` (or previously extracted full tree) using the partial manifest.
+- Optional `--root` / `--tag` on `verde-import` / `verde-merge`.
 
 ---
 
