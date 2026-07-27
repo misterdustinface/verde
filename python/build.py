@@ -679,7 +679,17 @@ def import_rbxlx(
                     )
                 except ValueError:
                     pass
-            path_key = str((rel.parent / base_for_script)).replace("\\", "/")
+            # Hierarchy path uses the instance Name, not the on-disk type suffix.
+            # extract writes Constants.module.lua + Constants.module.robloxmeta.json
+            # for a ModuleScript named "Constants"; path_map keys therefore end in
+            # "Constants", never "Constants.module".
+            if base_for_script.endswith(".module"):
+                inst_name = base_for_script[: -len(".module")]
+            elif base_for_script.endswith(".local"):
+                inst_name = base_for_script[: -len(".local")]
+            else:
+                inst_name = base_for_script
+            path_key = str((rel.parent / inst_name)).replace("\\", "/")
 
         if not force and manifest is not None and is_file_dirty is not None:
             any_dirty = False
