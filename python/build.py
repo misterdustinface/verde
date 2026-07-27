@@ -39,6 +39,7 @@ from typing import Any
 
 from attributes import decode_attributes, encode_attributes_b64
 from features.meta import walk_metas
+from xml_props import sanitize_name, parse_children, parse_property_element, decode_tags_from_prop
 
 
 _FS_CASE_INSENSITIVE = platform.system() in ("Darwin", "Windows")
@@ -280,14 +281,6 @@ def _resolve_item_name(item: ET.Element) -> str:
     return "Unnamed"
 
 
-def _sanitize_name(name: str) -> str:
-    invalid = '<>:"/\\|?*'
-    for char in invalid:
-        name = name.replace(char, "_")
-    name = name.strip()
-    return name or "Unnamed"
-
-
 def _build_instance_maps(
     root: ET.Element,
 ) -> tuple[dict[str, ET.Element], dict[str, ET.Element]]:
@@ -300,7 +293,7 @@ def _build_instance_maps(
             return
 
         raw_name = _resolve_item_name(item)
-        fs_base = _sanitize_name(raw_name)
+        fs_base = sanitize_name(raw_name)
         parent_id = id(parent) if parent is not None else 0
         if parent_id not in taken:
             taken[parent_id] = set()
@@ -352,17 +345,8 @@ def _get_tags(item: ET.Element) -> list[str]:
     if props is None:
         return []
     for p in props:
-        if p.get("name") != "Tags":
-            continue
-        if p.tag == "BinaryString":
-            raw = (p.text or "").replace("\n", "").replace(" ", "")
-            try:
-                data = base64.b64decode(raw)
-                return [t.decode("utf-8", errors="replace") for t in data.split(b"\0") if t]
-            except Exception:
-                return []
-        text = p.text or ""
-        return [t.strip() for t in text.replace("\0", ",").split(",") if t.strip()]
+        if p.get("name") == "Tags":
+            return decode_tags_from_prop(p)
     return []
 
 
@@ -376,62 +360,6 @@ def _get_attributes(item: ET.Element) -> dict[str, Any]:
     return {}
 
 
-def _parse_children(elem: ET.Element) -> dict[str, Any]:
-    children: dict[str, Any] = {}
-    for child in elem:
-        if len(child) == 0 and not child.attrib:
-            val: Any = child.text if child.text is not None else ""
-        else:
-            sub = _parse_children(child)
-            if child.attrib:
-                if not isinstance(sub, dict):
-                    sub = {"_value": sub} if sub else {}
-                sub = dict(sub)
-                sub["_attrs"] = dict(child.attrib)
-            val = sub if sub else (child.text if child.text is not None else "")
-
-        if child.tag in children:
-            existing = children[child.tag]
-            if not isinstance(existing, list):
-                children[child.tag] = [existing]
-            children[child.tag].append(val)
-        else:
-            children[child.tag] = val
-    return children
-
-
-def _parse_property_element(prop: ET.Element) -> dict[str, Any]:
-    tag = prop.tag
-    result: dict[str, Any] = {"type": tag}
-
-    if tag in (
-        "string",
-        "ProtectedString",
-        "bool",
-        "int",
-        "int64",
-        "float",
-        "double",
-        "token",
-        "BinaryString",
-        "Content",
-        "SharedString",
-        "Ref",
-        "UniqueId",
-        "BrickColor",
-    ):
-        result["value"] = prop.text if prop.text is not None else ""
-        return result
-
-    children = _parse_children(prop)
-    if children:
-        result["children"] = children
-    else:
-        result["value"] = prop.text if prop.text is not None else ""
-
-    return result
-
-
 def _current_structured_props(item: ET.Element) -> dict[str, Any]:
     full: dict[str, Any] = {}
     props_elem = item.find("Properties")
@@ -441,7 +369,7 @@ def _current_structured_props(item: ET.Element) -> dict[str, Any]:
         prop_name = prop.get("name")
         if not prop_name or prop_name in ("Source", "Tags", "AttributesSerialize"):
             continue
-        full[prop_name] = _parse_property_element(prop)
+        full[prop_name] = parse_property_element(prop)
     return full
 
 
@@ -628,7 +556,6 @@ def import_rbxlx(extracted_dir: str, output_rbxlx: str) -> None:
         print(f"  ({skipped_no_match} folder entries had no matching instance in the place)")
     print("Open the place in Studio (or re-open) to see the changes.")
 
-    # Refresh manifest so the next verde-merge starts from a clean baseline.
     try:
         from features.sync import write_manifest
 
