@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from features.meta import load_meta_merged, save_local_meta, split_local_keys
 from features.sync import (
     content_hash,
     dirty_paths,
@@ -95,7 +96,29 @@ class BridgeState:
         path = self.root / rel
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            if is_binary:
+
+            # When Studio pushes a .robloxmeta.json that still carries Referent,
+            # move that key into the machine-local sibling so the shared file
+            # stays VCS-clean.
+            text: str | None = None
+            if (
+                not is_binary
+                and rel.endswith(".robloxmeta.json")
+                and not rel.endswith(".robloxmeta.local.json")
+            ):
+                try:
+                    raw_text = content if isinstance(content, str) else content.decode("utf-8")
+                    data = json.loads(raw_text)
+                    if isinstance(data, dict) and "Referent" in data:
+                        shared, local = split_local_keys(data)
+                        text = json.dumps(shared, indent=2)
+                        save_local_meta(path, local)
+                except Exception:
+                    text = None
+
+            if text is not None:
+                path.write_text(text, encoding="utf-8")
+            elif is_binary:
                 path.write_bytes(content if isinstance(content, bytes) else content.encode("utf-8"))
             else:
                 path.write_text(
@@ -215,12 +238,12 @@ def make_handler(state: BridgeState):
                 for c in candidates:
                     full = state.root / c
                     if full.is_file():
-                        try:
-                            data = json.loads(full.read_text(encoding="utf-8"))
+                        # Return shared + machine-local overlay so matching still
+                        # sees Referent when the .local.json is present.
+                        data = load_meta_merged(full)
+                        if data is not None:
                             self._json(200, data)
                             return
-                        except Exception:
-                            pass
                 self._json(404, {"error": "no meta"})
                 return
 

@@ -14,18 +14,27 @@ Planned work lives in `TODO_FEATURES.md`. Defects live in `BUGS.md`.
 **Description**  
 Parses a Roblox place file into a hierarchy of folders + `.robloxmeta.json` (and script source files). Default is scripts-only (only paths leading to Script/LocalScript/ModuleScript); `--all` exports the full instance tree. Empty directories are pruned. Existing on-disk paths are reused on re-export; content is compared so identical files are left untouched (overwrite on diff, or `--interactive` prompt). Sibling Name collisions are uniquified within a run; case-insensitive uniqueness is enforced on Darwin/Windows to prevent silent overwrites. Name is taken from the Name property (preferred) or Item@name attribute. After export a `.verde/manifest.json` (adler32 + mtime) is written for later merge/import skipping.
 
+**Machine-local Referent**  
+The XML `referent` attribute is a serialization-time ID local to one `.rbxlx` / Studio session. It is useful for matching and exact Ref re-emission on the same machine, but it churns across saves and must not be version-controlled. Shared `.robloxmeta.json` files therefore never contain a top-level `"Referent"` key. When a Referent is present it is written to a sibling `*.robloxmeta.local.json` (gitignored). Import, Live Sync, and search load the merged view (shared + local) so matching continues to work on the producing machine. Old shared files that still contain `"Referent"` remain readable for backward compatibility; the next export moves the key into the local sibling.
+
+On every successful export, Verde also ensures a top-level `.gitignore` in the extracted folder ignores `*.robloxmeta.local.json`:
+- missing file → creates a short Verde block;
+- existing file missing the pattern → appends it;
+- already present → left unchanged.
+
 **Selective export**  
 `--root PATH` (dot-separated Names, e.g. `ServerScriptService` or `Workspace.MyModel`) starts the export from that instance as the top of the output tree. `--tag TAG` keeps only instances that carry the tag (or ancestors of tagged instances) so hierarchy is preserved. Both combine with the scripts-only keep map. A `.verde/partial.json` records the filter for future import grafting.
 
 **Key components**  
-- `python/extract.py` (iterative stack walk + progress, keep-map, prune, selective root/tag)
+- `python/extract.py` (iterative stack walk + progress, keep-map, prune, selective root/tag, local-meta split, `.gitignore` ensure)
+- `python/features/meta.py` (`load_meta_merged`, `save_local_meta`, `split_local_keys`)
 - `python/attributes.py` (AttributesSerialize decode)
 - `python/interesting.py` + `luau/interesting_properties.luau`
 
 ### 2. Import / rebuild folder → `.rbxlx` (`verde-import`)
 
 **Description**  
-Applies an extracted folder tree back into an existing `.rbxlx` (or creates a new one). Matching prefers Referent / UniqueId from meta, then hierarchy path. Re-emits Source, Properties, Tags, and Attributes. Unmatched place instances are left untouched. Falls back to full rebuild when the target file is missing. `verde-merge` is the same entry point with manifest-aware dirty set + mtime-win conflict rule.
+Applies an extracted folder tree back into an existing `.rbxlx` (or creates a new one). Matching prefers Referent / UniqueId from meta (Referent comes from the machine-local sibling when present), then hierarchy path. Re-emits Source, Properties, Tags, and Attributes. Unmatched place instances are left untouched. Falls back to full rebuild when the target file is missing. `verde-merge` is the same entry point with manifest-aware dirty set + mtime-win conflict rule.
 
 **`--force`**  
 Bypasses the clean-manifest / mtime-win skip logic. Every matching folder entry is considered for application even when the on-disk file is older than the target `.rbxlx` or matches the recorded hash+mtime. Content is still only written when `_needs_update` detects a real difference. Manifest is refreshed after a successful run.
@@ -37,7 +46,7 @@ Bypasses the clean-manifest / mtime-win skip logic. Every matching folder entry 
 ### 3. Offline touched-file tracking + mtime-win merge (`verde-merge`)
 
 **Description**  
-Uses `.verde/manifest.json` (zlib.adler32 numeric hash + mtime) written by export. Import/merge can skip clean files. When both sides changed the same logical content, the most-recently-modified side wins. Dry-run supported. Foundation for a future git-merge-style conflict path.
+Uses `.verde/manifest.json` (zlib.adler32 numeric hash + mtime) written by export. Import/merge can skip clean files. When both sides changed the same logical content, the most-recently-modified side wins. Dry-run supported. Foundation for a future git-merge-style conflict path. Machine-local `*.robloxmeta.local.json` files are never tracked in the manifest.
 
 **Key components**  
 - `python/features/sync.py`
@@ -45,7 +54,7 @@ Uses `.verde/manifest.json` (zlib.adler32 numeric hash + mtime) written by expor
 ### 4. Live Sync between extracted folder and open Studio (`verde-sync` + plugin)
 
 **Description**  
-Bi-directional event-driven sync of script Source (default) while a place remains open in Studio. Python side runs a fixed-port (3847) HTTP bridge + file watcher; the Studio plugin exposes a single Live Sync toggle. On toggle ON a full scan-and-sync occurs. Matching prefers Referent/UniqueId then path; UniqueId map is scripts-only by default. Experimental property sync (Name / selected props / Attributes on scripts) is off by default. Never auto-creates or deletes instances from disk. Actionable connection-error messages for artists.
+Bi-directional event-driven sync of script Source (default) while a place remains open in Studio. Python side runs a fixed-port (3847) HTTP bridge + file watcher; the Studio plugin exposes a single Live Sync toggle. On toggle ON a full scan-and-sync occurs. Matching prefers Referent/UniqueId then path; UniqueId map is scripts-only by default. Experimental property sync (Name / selected props / Attributes on scripts) is off by default. Never auto-creates or deletes instances from disk. Actionable connection-error messages for artists. The `/meta` endpoint returns the merged (shared + local) view; Studio-pushed meta that still contains `Referent` has the key moved into the local sibling.
 
 **Key components**  
 - `python/features/bridge.py` (`verde-sync`)

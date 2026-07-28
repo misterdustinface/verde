@@ -49,6 +49,9 @@ Property merge on differential apply:
 Understands the full structured Properties map (all types) plus Tags and
 Attributes so that round-trips are as lossless as possible.
 
+Referent is read from the machine-local sibling (*.robloxmeta.local.json) when
+present; shared .robloxmeta.json files never contain it.
+
 For offline dirty push/pull against a .rbxlx without opening Studio, use
 verde-merge. For live Studio updates, use verde-sync.
 """
@@ -65,7 +68,7 @@ from pathlib import Path
 from typing import Any
 
 from attributes import decode_attributes, encode_attributes_b64
-from features.meta import walk_metas
+from features.meta import load_meta_merged, walk_metas
 from xml_props import sanitize_name, parse_children, parse_property_element, decode_tags_from_prop
 
 
@@ -81,12 +84,12 @@ def read_text(path: Path) -> str:
 
 
 def load_meta(path: Path) -> dict[str, Any]:
+    """Load shared + machine-local meta for a directory (folder instances)."""
     json_path = path / ".robloxmeta.json"
     if json_path.is_file():
-        try:
-            return json.loads(json_path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+        merged = load_meta_merged(json_path)
+        if merged is not None:
+            return merged
 
     legacy = path / ".robloxmeta"
     meta: dict[str, Any] = {}
@@ -99,12 +102,12 @@ def load_meta(path: Path) -> dict[str, Any]:
 
 
 def script_meta_for(script_file: Path) -> dict[str, Any]:
+    """Load shared + machine-local meta for a script companion file."""
     candidate = script_file.parent / f"{script_file.stem}.robloxmeta.json"
     if candidate.is_file():
-        try:
-            return json.loads(candidate.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+        merged = load_meta_merged(candidate)
+        if merged is not None:
+            return merged
     return {}
 
 
@@ -926,7 +929,8 @@ def main() -> None:
             "Blank MeshId/Content in the export applies by default (VCS-correct). "
             "Use --preserve-content only when recovering from older corrupted exports. "
             "New folder entries whose parent path already exists in the place are "
-            "auto-created (UniqueId left for Studio to assign)."
+            "auto-created (UniqueId left for Studio to assign). "
+            "Referent is read from machine-local *.robloxmeta.local.json when present."
         )
     )
     parser.add_argument("extracted_dir", help="Path to extracted Verde folder")

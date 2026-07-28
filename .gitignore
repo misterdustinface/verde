@@ -63,6 +63,12 @@ roundtrip_test/
 *.rbxlx
 !python/tests/**/*.rbxlx
 
+# Machine-local metadata (Referent and other session-only data)
+# These are written next to the shared .robloxmeta.json files and must not
+# be committed — they churn across Studio saves and are only useful on the
+# machine that produced them.
+*.robloxmeta.local.json
+
 # Local / machine-only (not for the repo)
 *.sh
 Containerfile
