@@ -46,7 +46,6 @@ Future-proofing note only; no current incorrect behaviour.
 ### 4. Residual notes from prior scans still worth monitoring
 
 - Live Sync “N file(s) had no matching script” noise after renames remains expected until Referent healing (TODO_FEATURES I1).
-- Import auto-create still requires the parent path to already exist in the place (full grafting is feature work under selective extract residual).
 - Attributes search/filter + Luau wrappers remain open feature work, not defects in the binary round-trip.
 
 These are not elevated as independent Open issues today but are retained here so residual scans continue to see them.
@@ -109,6 +108,7 @@ These correctness problems were fixed during development and are no longer prese
 21. Bridge `write_manifest` / `mark_applied` no longer swallow exceptions silently. Both paths now print a short diagnostic (same style as other bridge `!` lines) when the on-disk manifest write fails, while still continuing so the live path stays robust. (PR #32)
 22. `build.py` `_build_instance_maps` now uses the shared `claim_unique_name` helper from `xml_props.py` (and no longer carries a private `_FS_CASE_INSENSITIVE` + while-loop). Completes the shared-helper extraction begun in PR #29; export and import path uniqueness are now a single source of truth. (this PR)
 23. SharedString Tags resolution now looks up the real payload from the root `<SharedStrings>` table (md5 → base64 BinaryString content). Previously the hash itself was treated as BinaryString data, producing garbage tags such as `['iA@NMuvp']` instead of the real list; `verde-test-roundtrip` reported widespread Tags mismatches. Fixed in `xml_props.parse_shared_strings` + decode helpers; extract and the roundtrip test both pass the map. Full root-level SharedStrings preservation remains TODO_FEATURES #2.
+24. Differential import now always attempts create for a disk entry that is absent from the place (clean/manifest skip only applies when the place still has the matching Item). Missing intermediate parents are recursively grafted as Folders. This removes the need for `--force` when adding new/AI-generated scripts (including bare `.module.lua` with no companion `.robloxmeta.json`) and closes the residual “parent path missing; cannot auto-create” path. (PR pending)
 
 ---
 

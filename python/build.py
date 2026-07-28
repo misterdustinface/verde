@@ -13,16 +13,24 @@ verde-import is the command:
   preferentially, then by hierarchy path), and apply Source / Properties / Tags /
   Attributes from the folder into the place file.
 
-When a folder entry has no match in the place but its parent hierarchy path
-already exists, a new Item is created under that parent (ClassName / Name /
-Referent / Source / Tags / Attributes from meta). UniqueId is omitted so
-Studio assigns a fresh one. If the parent path is also missing the entry is
-still skipped.
+When a folder entry has no match in the place, missing intermediate parents are
+recursively created as Folders (Name taken from the path segment; UniqueId left
+for Studio). The leaf is then created under the now-guaranteed parent
+(ClassName / Name / Referent / Source / Tags / Attributes from meta). This
+supports both hand-added / AI-generated files that lack intermediate folders in
+the place and deep trees whose parents were never exported.
 
 Bare script files (.lua / .local.lua / .module.lua) that lack a companion
 .robloxmeta.json are also discovered and treated as new candidates (defaults
 invented from the filename). This matches full-rebuild behaviour and prevents
-hand-added scripts from being silently ignored.
+hand-added or AI-generated scripts from being silently ignored. The invented
+Name is always written both as Item@name and as the Name property so Studio
+preserves it (property is the source of truth; attribute alone can be reset
+to ClassName).
+
+Clean (manifest / mtime-win) only skips when the place *still has* a matching
+Item. A disk entry that is absent from the place is always treated as a create
+candidate, so additions of missing files happen by default (no --force needed).
 
 After create/update, high-confidence renames and unmatched leftovers are handled:
 
@@ -35,18 +43,15 @@ After create/update, high-confidence renames and unmatched leftovers are handled
   Place content outside the exported tree is never pruned.
   Pass --no-delete to report only.
 
-Clean (manifest / mtime-win) candidates still resolve to their place Item and
-mark it applied, so unchanged scripts are never treated as leftovers.
-
 Scripts-only safety: when every candidate in the run is a Script / LocalScript /
 ModuleScript, pure prune is limited to those ClassNames so a normal scripts-only
 import does not wipe non-script content. High-confidence renames still apply to
 any ClassName.
 
 When a .verde/manifest.json is present, files whose simple numeric hash + mtime
-match the recorded entry are skipped for writing (and mtime-wins is applied
-against the .rbxlx) but still mark their place match as applied. After a
-successful import the manifest is refreshed.
+match the recorded entry are skipped for writing *only when the place still has
+the match* (and mtime-wins is applied against the .rbxlx). After a successful
+import the manifest is refreshed.
 
 --force bypasses the clean / mtime-win skips so every matching folder entry is
 considered for application (still only written when content actually differs
@@ -189,6 +194,17 @@ def add_properties(
     if isinstance(tags, str):
         tags = [tags] if tags else []
 
+    # Studio treats the Name *property* as source of truth. Item@name alone can
+    # be ignored / reset to ClassName on open. Always emit the property when we
+    # know the intended name (from top-level meta or from structured Properties).
+    name_val = meta.get("Name")
+    if name_val is None and isinstance(full.get("Name"), dict):
+        name_val = full["Name"].get("value")
+    if name_val is not None and str(name_val) and "Name" not in full:
+        el = ET.SubElement(props, "string")
+        el.set("name", "Name")
+        el.text = str(name_val)
+
     for prop_name, structured in full.items():
         if prop_name == "Source":
             continue
@@ -222,7 +238,7 @@ def add_properties(
         el.set("name", "AttributesSerialize")
         el.text = b64
 
-    already = set(full.keys()) | {"Source", "Tags", "AttributesSerialize"}
+    already = set(full.keys()) | {"Source", "Tags", "AttributesSerialize", "Name"}
     for key, val in meta.items():
         if key in ("ClassName", "Name", "Tags", "Attributes", "Properties", "Referent") or key in already:
             continue
@@ -625,6 +641,8 @@ def _create_item_from_meta(
 
     UniqueId is deliberately omitted so Studio assigns a fresh one on open.
     Referent from meta is kept so subsequent imports can match by Referent.
+    Name is written both as Item@name and (via add_properties) as the Name
+    property so Studio keeps the intended name instead of resetting to ClassName.
     """
     class_name = str(meta.get("ClassName") or ("ModuleScript" if source is not None else "Folder"))
     name = str(meta.get("Name") or leaf_name or "Unnamed")
@@ -636,12 +654,62 @@ def _create_item_from_meta(
         item.set("referent", str(meta["Referent"]))
 
     create_meta = dict(meta)
+    create_meta["Name"] = name  # ensure top-level Name reaches add_properties
     props = dict(create_meta.get("Properties") or {})
     props.pop("UniqueId", None)
     create_meta["Properties"] = props
 
     add_properties(item, create_meta, source=source)
     return item
+
+
+def _ensure_parent_path(
+    parent_path: str,
+    path_map: dict[str, ET.Element],
+    parent_map: dict[ET.Element, ET.Element | None],
+    root: ET.Element,
+    applied_items: set[int],
+    matched_path_keys: set[str],
+    created_under: dict[str, list[tuple[str, str, str | None]]],
+) -> ET.Element:
+    """Ensure the hierarchy path exists, recursively creating missing Folders.
+
+    Returns the parent Item (or the roblox root for the empty path).
+    Intermediate segments that are absent from path_map are created as
+    Folder instances with Name = path segment. UniqueId is left unset so
+    Studio assigns a fresh one. Real meta for an intermediate (when present)
+    will already have been applied because candidates are sorted shallow-first.
+    """
+    if not parent_path:
+        return root
+    if parent_path in path_map:
+        return path_map[parent_path]
+
+    parts = parent_path.split("/")
+    current_path = ""
+    current_parent: ET.Element = root
+    for seg in parts:
+        next_path = f"{current_path}/{seg}" if current_path else seg
+        if next_path in path_map:
+            current_parent = path_map[next_path]
+            current_path = next_path
+            continue
+
+        # Create a Folder for this missing segment
+        meta = {"ClassName": "Folder", "Name": seg}
+        new_item = _create_item_from_meta(
+            current_parent, meta, source=None, leaf_name=seg
+        )
+        path_map[next_path] = new_item
+        parent_map[new_item] = current_parent if current_parent is not root else None
+        applied_items.add(id(new_item))
+        matched_path_keys.add(next_path)
+        created_under.setdefault(current_path, []).append((next_path, "Folder", None))
+        print(f"  · created intermediate Folder {next_path}")
+        current_parent = new_item
+        current_path = next_path
+
+    return current_parent
 
 
 def _prefer_candidate(
@@ -942,6 +1010,9 @@ def import_rbxlx(
             item = path_map[path_key]
 
         # Clean candidates: mark place match applied, never write.
+        # Only skip when the place *still has* the matching Item. A disk entry
+        # that is absent from the place is always a create candidate (so new /
+        # AI-generated / previously-skipped files are added without --force).
         if clean and item is not None:
             applied_items.add(id(item))
             matched_path_keys.add(path_key)
@@ -949,11 +1020,6 @@ def import_rbxlx(
             continue
 
         if item is None:
-            # Clean with no place match → nothing to mark; skip create for clean.
-            if clean:
-                skipped_clean += 1
-                continue
-
             parent_item: ET.Element | None = None
             leaf_name = ""
             parent_path = ""
@@ -961,10 +1027,17 @@ def import_rbxlx(
                 parts = path_key.split("/")
                 leaf_name = parts[-1]
                 parent_path = "/".join(parts[:-1]) if len(parts) > 1 else ""
-                if parent_path == "":
-                    parent_item = root
-                elif parent_path in path_map:
-                    parent_item = path_map[parent_path]
+                parent_item = _ensure_parent_path(
+                    parent_path,
+                    path_map,
+                    parent_map,
+                    root,
+                    applied_items,
+                    matched_path_keys,
+                    created_under,
+                )
+            else:
+                parent_item = root
 
             if parent_item is not None:
                 new_item = _create_item_from_meta(
@@ -972,7 +1045,7 @@ def import_rbxlx(
                 )
                 if path_key:
                     path_map[path_key] = new_item
-                    parent_map[new_item] = parent_item
+                    parent_map[new_item] = parent_item if parent_item is not root else None
                 new_ref = new_item.get("referent")
                 if new_ref:
                     referent_map[new_ref] = new_item
@@ -988,7 +1061,7 @@ def import_rbxlx(
 
             print(
                 f"  · no match for {c['rel']} "
-                f"(parent path missing; cannot auto-create)"
+                f"(could not ensure parent path; cannot auto-create)"
             )
             skipped_no_match += 1
             continue
@@ -1099,7 +1172,7 @@ def import_rbxlx(
     if skipped_redundant:
         print(f"  ({skipped_redundant} redundant disk entry(ies) skipped — Name_N / shared Referent or UniqueId)")
     if skipped_no_match:
-        print(f"  ({skipped_no_match} folder entries had no matching instance and no creatable parent)")
+        print(f"  ({skipped_no_match} folder entries had no matching instance and could not ensure parent)")
     if renames_reported and no_rename:
         print(f"  ({renames_reported} high-confidence rename(s) reported — omit --no-rename to remove the old name)")
     if leftovers_reported and no_delete:
@@ -1124,15 +1197,15 @@ def main() -> None:
             "CLI: verde-import. "
             "Blank MeshId/Content in the export applies by default (VCS-correct). "
             "Use --preserve-content only when recovering from older corrupted exports. "
-            "New folder entries whose parent path already exists in the place are "
-            "auto-created (UniqueId left for Studio to assign). "
+            "New folder entries are auto-created; missing intermediate parents are "
+            "recursively grafted as Folders (UniqueId left for Studio). "
+            "A disk entry that is absent from the place is always created by default "
+            "(no --force required), including bare scripts without .robloxmeta.json. "
             "High-confidence renames and unmatched leftovers under the extract tree "
             "are removed by default. Pass --no-rename / --no-delete to report only. "
             "Clean (unchanged) disk entries still mark their place match so they are "
             "never false leftovers. "
             "Scripts-only runs still protect non-script place content on pure prune. "
-            "Bare script files without a companion .robloxmeta.json are also "
-            "discovered and auto-created when the parent exists. "
             "Referent is read from machine-local *.robloxmeta.local.json when present."
         )
     )
@@ -1150,7 +1223,8 @@ def main() -> None:
             "Force consideration of all matching folder files, bypassing the "
             "manifest clean-check and mtime-win logic that would otherwise skip "
             "writes. Content is still only written when it actually differs. "
-            "Redundant disk entries are still skipped."
+            "Redundant disk entries are still skipped. Missing entries are always "
+            "created even without this flag."
         ),
     )
     parser.add_argument(
