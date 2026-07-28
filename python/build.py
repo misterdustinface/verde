@@ -19,6 +19,11 @@ Referent / Source / Tags / Attributes from meta). UniqueId is omitted so
 Studio assigns a fresh one. If the parent path is also missing the entry is
 still skipped.
 
+Bare script files (.lua / .local.lua / .module.lua) that lack a companion
+.robloxmeta.json are also discovered and treated as new candidates (defaults
+invented from the filename). This matches full-rebuild behaviour and prevents
+hand-added scripts from being silently ignored.
+
 After create/update, high-confidence renames and unmatched leftovers are handled:
 
 - High-confidence rename (any ClassName): exactly one newly-created sibling of
@@ -32,10 +37,6 @@ Scripts-only safety: when every candidate in the run is a Script / LocalScript /
 ModuleScript, pure prune is limited to those ClassNames so a normal scripts-only
 import does not wipe non-script content. High-confidence renames still apply to
 any ClassName.
-Bare script files (.lua / .local.lua / .module.lua) that lack a companion
-.robloxmeta.json are also discovered and treated as new candidates (defaults
-invented from the filename). This matches full-rebuild behaviour and prevents
-hand-added scripts from being silently ignored.
 
 When a .verde/manifest.json is present, files whose simple numeric hash + mtime
 match the recorded entry are skipped early (and mtime-wins is applied against
@@ -1074,13 +1075,6 @@ def import_rbxlx(
         print(f"  ({renames_reported} high-confidence rename(s) reported — pass without --nodelete to remove the old name)")
     if leftovers_reported and nodelete:
         print(f"  ({leftovers_reported} leftover(s) reported — pass without --nodelete to prune them)")
-    if scripts_only_run and leftovers_reported == 0 and any(
-        (item.get("class") or "") not in _SCRIPT_CLASSES
-        for _, item in unmatched
-        if id(item) not in applied_items
-    ):
-        # Informative only when we skipped non-script leftovers in scripts-only mode
-        pass
     print("Open the place in Studio (or re-open) to see the changes.")
 
     try:
