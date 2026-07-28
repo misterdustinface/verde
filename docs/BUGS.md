@@ -36,21 +36,14 @@ Incorrect or incomplete “interesting” flatten set if the Luau source changes
 **Impact**  
 Non-identical rebuilds; rare behavioural differences for order-dependent instances.
 
-### 3. Bridge `write_manifest` / `mark_applied` swallow exceptions
-
-In `features/bridge.py`, both `mark_applied` and `write_file` catch broad `Exception` around the `write_manifest` call and continue. Under rare permission, disk-full, or concurrent-access conditions the on-disk `.verde/manifest.json` can lag the in-memory `known` map. The primary file write already records known, so practical impact is low while the folder remains writable, but the silent path can produce transient “dirty again” flicker after a successful Studio→folder push.
-
-**Impact**  
-Silent lag of the on-disk manifest; low practical impact, but a real silent-failure path.
-
-### 4. `build.py` still re-implements sibling name uniqueness (residual of shared helper)
+### 3. `build.py` still re-implements sibling name uniqueness (residual of shared helper)
 
 `claim_unique_name` + `FS_CASE_INSENSITIVE` live in `xml_props.py` and are used by extract. `build.py` `_build_instance_maps` still contains its own identical while-loop + local `_FS_CASE_INSENSITIVE`. The algorithms match today (so no path-map mismatch), but the duplication is the incomplete half of the shared-helper extraction and is the same class of residual that previously allowed case-path drift.
 
 **Impact**  
 Maintainability risk; future uniqueness policy changes must be applied in two places or the case-path-map class of bugs can reappear.
 
-### 5. Selective `--tag` / keep-map still only surface first-class Tags (post-SharedString fix residual)
+### 4. Selective `--tag` / keep-map still only surface first-class Tags (post-SharedString fix residual)
 
 After the SharedString decode work, `_item_has_tag` and extract correctly populate `meta["Tags"]` for all supported forms. Selective export itself is correct. Residual observation: if a place ever stores Tags exclusively in a form the shared decoder does not yet recognise, the keep-map would still treat the instance as untagged. No additional forms are known today; this item exists so the decoder remains the single source of truth for any future Tags variants.
 
@@ -113,6 +106,7 @@ These correctness problems were fixed during development and are no longer prese
 18. Differential import path_key for ModuleScript / LocalScript companion metas (`Name.module.robloxmeta.json` / `Name.local.robloxmeta.json`) no longer includes the type suffix. Previously path_key ended in `…/Name.module` while the place path_map used the instance Name (`…/Name`), so the path fallback never matched and Sources were skipped whenever Referent was missing or stale. Fixed by stripping a trailing `.module` / `.local` when building the hierarchy key (PR #24).
 19. Plugin actions (Set/Replace, Rename tag, Restore scripts, Live Sync apply) now surface a status note when `ChangeHistoryService:TryBeginRecording` returns nil (playtest mode, concurrent recording, etc.). The change still applies; the user is informed that no undo waypoint was created.
 20. Tags stored as SharedString are now decoded on extract (and visible to selective `--tag`). `decode_tags_from_prop` / `decode_tags_from_structured` handle BinaryString, string/ProtectedString, and SharedString forms; extract_properties and `_item_has_tag` both use the shared helpers. Residual Tags-decoding duplication inside extract was removed. (PR #29)
+21. Bridge `write_manifest` / `mark_applied` no longer swallow exceptions silently. Both paths now print a short diagnostic (same style as other bridge `!` lines) when the on-disk manifest write fails, while still continuing so the live path stays robust. (this PR)
 
 ---
 
