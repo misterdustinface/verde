@@ -24,24 +24,38 @@ When Open issues is empty, contains only “None currently.”, or is sparse (ro
 
 ### 1. Tags stored as SharedString are not decoded on extract
 
-`extract.py` only decodes the Tags property when its type is BinaryString, string, or ProtectedString. When Tags appears as a SharedString (rare but legal in some place formats), the value stays in the full Properties map and `meta["Tags"]` remains empty. Rebuild therefore does not re-emit a proper Tags BinaryString.
+`extract.py` only decodes the Tags property when its type is BinaryString, string, or ProtectedString. When Tags appears as a SharedString (rare but legal in some place formats), the value stays in the full Properties map and `meta["Tags"]` remains empty. Rebuild therefore does not re-emit a proper Tags BinaryString (it may re-emit the original SharedString form if left in full Properties, but the first-class Tags list used by search/tags CLIs and Live Sync is empty).
 
 **Impact**  
-Tags are lost on a round-trip for places that use the SharedString form.
+Tags are invisible to meta-driven tools and lost from the first-class surface for places that use the SharedString form.
 
-### 2. Fragile `interesting.py` property-name extraction
+### 2. Selective `--tag` / `_item_has_tag` also ignore SharedString Tags
+
+`_item_has_tag` (used by `--tag` selective export and keep-map) only inspects BinaryString or plain text Tags. SharedString-tagged instances are treated as untagged and can be pruned from scripts-only / tag-filtered exports even when they should be kept.
+
+**Impact**  
+Silent incomplete selective extracts for the (rare) SharedString Tags places; compounds issue 1.
+
+### 3. Fragile `interesting.py` property-name extraction
 
 The interesting-properties list is extracted from the Luau source with a simple regex that matches double-quoted strings. Any future double-quoted string that is not a property name (comments, string literals inside the module, etc.) will pollute the list, and legitimate property names written with single quotes or concatenation will be missed.
 
 **Impact**  
 Incorrect or incomplete “interesting” flatten set; search/set surface becomes unreliable if the Luau source changes style.
 
-### 3. Child order not preserved on Python import
+### 4. Child order not preserved on Python full rebuild / import
 
-`build.py` / import walks the filesystem with `iterdir()`, whose order is not guaranteed and is typically sorted. Roblox instance child order is therefore not restored. Usually harmless for scripts, but prevents byte-identical round-trips and can affect order-sensitive behaviour (UI lists, some collection patterns).
+`build.py` `process_directory` walks the filesystem with `sorted(iterdir())`. Roblox instance child order is therefore not restored on full rebuild. Differential import also leaves existing place children in their original order and does not re-order them to match the folder. Usually harmless for scripts, but prevents byte-identical round-trips and can affect order-sensitive behaviour (UI lists, some collection patterns).
 
 **Impact**  
 Non-identical rebuilds; rare behavioural differences for order-dependent instances.
+
+### 5. Tags decode logic still duplicated in extract.py (residual consolidation)
+
+`xml_props.decode_tags_from_prop` exists and is used by build, but `extract_properties` and `_item_has_tag` still contain their own near-identical BinaryString / string decode blocks. The incomplete extraction means SharedString handling (and any future Tags variants) can diverge between the two paths and between extract vs build.
+
+**Impact**  
+Maintainability risk that already manifested as the SharedString gaps above; future Tags edge cases more likely to be fixed in only one place.
 
 ---
 
@@ -71,6 +85,7 @@ These behaviours are deliberate and should not be “fixed” without an explici
 - **Attributes search/filter and Luau wrappers** remain open (see TODO_FEATURES); not defects in the existing binary round-trip.
 - Live Sync “N file(s) had no matching script” noise after renames is expected until Referent healing (TODO_FEATURES I1) lands; not treated as a correctness bug today.
 - Selective-extract foundation is shipped; import-side grafting of a partial tree is still residual feature work, not a defect.
+- Bridge `write_manifest` / `mark_applied` swallow OSError/Exception on the manifest write itself; under rare permission or disk-full conditions the on-disk manifest can lag the in-memory known map (the primary write_file path already records known). Low practical impact while the folder remains writable.
 
 ---
 
