@@ -26,6 +26,7 @@ search, and edit.
 - Selective: --root PATH and/or --tag TAG limit the exported tree.
 - Machine-local Referent is written to *.robloxmeta.local.json (gitignored),
   never into the shared .robloxmeta.json that is checked into VCS.
+- A top-level .gitignore is created/updated so *.robloxmeta.local.json is ignored.
 """
 
 from __future__ import annotations
@@ -55,6 +56,17 @@ from xml_props import sanitize_name, parse_children, parse_property_element, dec
 SCRIPT_EXTS = (".lua", ".local.lua", ".module.lua")
 
 _FS_CASE_INSENSITIVE = platform.system() in ("Darwin", "Windows")
+
+# Pattern that must appear in the extracted folder's .gitignore so machine-local
+# Referent files are never committed. Also used when creating a fresh file.
+_LOCAL_META_GITIGNORE_PATTERN = "*.robloxmeta.local.json"
+
+_DEFAULT_GITIGNORE = """\
+# Verde — machine-local metadata (Referent and other session-only data).
+# These files are useful on the machine that produced the export but churn
+# across Studio saves and must not be checked into version control.
+*.robloxmeta.local.json
+"""
 
 
 def get_script_extension(class_name: str) -> str:
@@ -357,6 +369,47 @@ def _write_meta_pair(
     return status
 
 
+def _ensure_gitignore(root: Path) -> str:
+    """Ensure root/.gitignore ignores machine-local Referent files.
+
+    - Missing file → create with a short Verde block.
+    - Existing file that already has the pattern → leave unchanged.
+    - Existing file missing the pattern → append a short block.
+
+    Returns a status string for logging: "created" | "updated" | "unchanged".
+    """
+    path = root / ".gitignore"
+    pattern = _LOCAL_META_GITIGNORE_PATTERN
+
+    if not path.is_file():
+        path.write_text(_DEFAULT_GITIGNORE, encoding="utf-8")
+        return "created"
+
+    try:
+        existing = path.read_text(encoding="utf-8")
+    except OSError:
+        return "unchanged"
+
+    # Already covered (exact line or as a path component)
+    for line in existing.splitlines():
+        stripped = line.strip()
+        if stripped == pattern or stripped.endswith("/" + pattern) or stripped == "/" + pattern:
+            return "unchanged"
+        # Also accept a broader ignore that already covers it
+        if stripped in ("*.robloxmeta.*", "*.local.json"):
+            return "unchanged"
+
+    block = (
+        "\n# Verde — machine-local metadata (Referent); do not commit\n"
+        f"{pattern}\n"
+    )
+    # Preserve a trailing newline on the existing content
+    if existing and not existing.endswith("\n"):
+        existing += "\n"
+    path.write_text(existing + block, encoding="utf-8")
+    return "updated"
+
+
 def extract(
     rbxlx_path: str,
     output_dir: str = "extracted",
@@ -544,6 +597,16 @@ def extract(
     if orphans:
         print(f"  Orphaned uniquified removed: {orphans}")
 
+    # Ensure the extracted tree ignores machine-local Referent files in git.
+    try:
+        gi_status = _ensure_gitignore(out)
+        if gi_status == "created":
+            print(f"  .gitignore : created (ignores {_LOCAL_META_GITIGNORE_PATTERN})")
+        elif gi_status == "updated":
+            print(f"  .gitignore : updated (added {_LOCAL_META_GITIGNORE_PATTERN})")
+    except OSError as exc:
+        print(f"  (.gitignore not written: {exc})")
+
     if root_filter or tag_filter:
         partial = {
             "root": root_filter,
@@ -573,7 +636,8 @@ def main() -> None:
             "Export a Roblox .rbxlx into a searchable/editable folder tree (CLI: verde-export). "
             "Existing paths are reused; files are overwritten only when content differs. "
             "Use --root / --tag for selective (partial) exports. "
-            "Referent is written only to machine-local *.robloxmeta.local.json (gitignored)."
+            "Referent is written only to machine-local *.robloxmeta.local.json (gitignored). "
+            "A top-level .gitignore is created/updated to ignore those local files."
         )
     )
     parser.add_argument("rbxlx", help="Path to .rbxlx file")
