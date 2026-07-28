@@ -12,6 +12,8 @@ Manifest lives at <extracted>/.verde/manifest.json and records a simple numeric
 content hash (zlib.adler32) + mtime for every .lua / .robloxmeta.json so that
 import can skip unchanged files and conflicts can be resolved by "most recently
 modified wins" today.
+
+The top-level `.ai` AI agent notes directory is never tracked in the manifest.
 """
 
 from __future__ import annotations
@@ -22,6 +24,8 @@ import time
 import zlib
 from pathlib import Path
 from typing import Any
+
+from features.meta import AI_NOTES_DIRNAME, is_under_ai_notes
 
 
 MANIFEST_DIR = ".verde"
@@ -72,6 +76,11 @@ def collect_file_entries(root: Path) -> dict[str, dict[str, Any]]:
         except ValueError:
             continue
         if rel.parts and rel.parts[0] == MANIFEST_DIR:
+            continue
+        # Never track AI agent notes.
+        if rel.parts and rel.parts[0] == AI_NOTES_DIRNAME:
+            continue
+        if is_under_ai_notes(p, root):
             continue
         entry = _file_entry(p)
         if entry is not None:
@@ -185,6 +194,8 @@ def dirty_paths(
         except ValueError:
             continue
         if rel.split("/")[0] == MANIFEST_DIR:
+            continue
+        if rel.split("/")[0] == AI_NOTES_DIRNAME:
             continue
         if is_file_dirty(root, rel, manifest, rbxlx_mtime=rbxlx_mtime):
             dirty.add(rel)
