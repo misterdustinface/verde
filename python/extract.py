@@ -24,6 +24,8 @@ search, and edit.
 - After a successful export a .verde/manifest.json is written so later merge/import
   can skip unchanged files (simple adler32 hash + mtime).
 - Selective: --root PATH and/or --tag TAG limit the exported tree.
+- Machine-local Referent is written to *.robloxmeta.local.json (gitignored),
+  never into the shared .robloxmeta.json that is checked into VCS.
 """
 
 from __future__ import annotations
@@ -40,6 +42,12 @@ from pathlib import Path
 from typing import Any
 
 from attributes import decode_attributes
+from features.meta import (
+    LOCAL_META_KEYS,
+    local_meta_path,
+    save_local_meta,
+    split_local_keys,
+)
 from interesting import load_interesting_props
 from xml_props import sanitize_name, parse_children, parse_property_element, decode_tags_from_prop
 
@@ -272,7 +280,7 @@ def _cleanup_orphaned_uniquified(root: Path, written: dict[Path, set[str]]) -> i
             continue
         for entry in entries:
             stem = entry.name
-            for ext in SCRIPT_EXTS + (".robloxmeta.json",):
+            for ext in SCRIPT_EXTS + (".robloxmeta.json", ".robloxmeta.local.json"):
                 if entry.name.endswith(ext):
                     stem = entry.name[: -len(ext)]
                     break
@@ -330,6 +338,23 @@ def _maybe_write(path: Path, content: str, interactive: bool) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     return "written"
+
+
+def _write_meta_pair(
+    meta_path: Path,
+    meta: dict[str, Any],
+    interactive: bool,
+) -> str:
+    """Write shared meta (no LOCAL keys) + optional machine-local sibling.
+
+    Returns the status of the shared write ("written" / "unchanged" / "skipped").
+    Local file is always written when a Referent (or other local key) is present;
+    it is not subject to the interactive prompt because it is never checked in.
+    """
+    shared, local = split_local_keys(meta)
+    status = _maybe_write(meta_path, json.dumps(shared, indent=2), interactive)
+    save_local_meta(meta_path, local)
+    return status
 
 
 def extract(
@@ -455,7 +480,7 @@ def extract(
                     meta[k] = v
 
             meta_path = script_file.parent / f"{script_file.stem}.robloxmeta.json"
-            _record(_maybe_write(meta_path, json.dumps(meta, indent=2), interactive))
+            _record(_write_meta_pair(meta_path, meta, interactive))
             script_count += 1
 
             child_items = [c for c in item if c.tag == "Item"]
@@ -485,13 +510,8 @@ def extract(
         if referent:
             meta["Referent"] = referent
 
-        _record(
-            _maybe_write(
-                full_path / ".robloxmeta.json",
-                json.dumps(meta, indent=2),
-                interactive,
-            )
-        )
+        meta_path = full_path / ".robloxmeta.json"
+        _record(_write_meta_pair(meta_path, meta, interactive))
 
         for child in reversed(list(item)):
             stack.append((child, full_path))
@@ -552,7 +572,8 @@ def main() -> None:
         description=(
             "Export a Roblox .rbxlx into a searchable/editable folder tree (CLI: verde-export). "
             "Existing paths are reused; files are overwritten only when content differs. "
-            "Use --root / --tag for selective (partial) exports."
+            "Use --root / --tag for selective (partial) exports. "
+            "Referent is written only to machine-local *.robloxmeta.local.json (gitignored)."
         )
     )
     parser.add_argument("rbxlx", help="Path to .rbxlx file")
