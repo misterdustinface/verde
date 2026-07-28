@@ -31,8 +31,8 @@ dev = ["pytest>=7.0"]
 
 [project.scripts]
 # Offline place file tools
-verde-export = "extract:main"
-verde-import = "build:main"
+verde-export = "export:main"
+verde-import = "import_rbxlx:main"
 # Offline folder ↔ .rbxlx (mtime-win). Future: real git-merge-style conflict resolution.
 verde-merge = "features.sync:main"
 # Live folder ↔ open Studio (HTTP bridge + watcher)
@@ -49,8 +49,8 @@ verde-test-roundtrip = "test_roundtrip:main"
 package-dir = { "" = "python" }
 packages = ["features"]
 py-modules = [
-    "extract",
-    "build",
+    "export",
+    "import_rbxlx",
     "interesting",
     "test_roundtrip",
     "attributes",
