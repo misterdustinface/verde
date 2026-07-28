@@ -78,16 +78,36 @@ _DEFAULT_GITIGNORE = """\
 """
 
 _AI_NOTES_README = """\
-# AI Agent Notes
+# AI Agent Notes (`.ai/`)
 
-This directory is reserved for notes written by AI agents working on this
-Verde-extracted tree.
+This top-level directory is reserved for **AI agent notes** on a Verde-extracted
+project tree. It exists whether or not the project already contains any
+Verde-specific notes, plans, or agent history.
 
-It is **never** imported into Roblox Studio by `verde-import` / `verde-merge`.
-`verde-export` will never delete, prune, or overwrite the contents of this
-directory.
+## What this folder is for
 
-Place any agent scratchpads, plans, observations, or other non-Roblox files here.
+- Scratchpads, observations, architecture notes, and decisions made while an
+  AI agent analyses or edits this tree.
+- Cross-session context that helps future agents (or the same agent later)
+  understand the project without re-deriving everything from scratch.
+- Anything that improves long-term project understanding and is **not** Roblox
+  instance data (scripts, properties, tags, attributes, hierarchy).
+
+You are encouraged to leave **valuable, durable notes** here. Prefer concise
+summaries of structure, non-obvious conventions, known pitfalls, and open
+questions over ephemeral chat logs. Future analysis benefits from durable
+context more than from raw transcripts.
+
+## Guarantees from Verde
+
+- **`verde-import` / `verde-merge`** never import anything under `.ai/` into a
+  place file or into Roblox Studio.
+- **`verde-export`** never deletes, prunes, or overwrites the contents of this
+  directory. Re-exports leave your notes intact.
+- Files here are not tracked in `.verde/manifest.json`.
+
+This folder is intentionally outside the Roblox instance tree so agent context
+stays on disk with the project and stays out of Studio.
 """
 
 
