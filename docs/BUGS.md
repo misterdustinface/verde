@@ -22,35 +22,28 @@ When Open issues is empty, contains only “None currently.”, or is sparse (ro
 
 ## Open issues
 
-### 1. `build.py` still re-implements sibling name uniqueness (incomplete shared helper)
-
-`claim_unique_name` + `FS_CASE_INSENSITIVE` live in `xml_props.py` and are fully used by extract. `build.py` `_build_instance_maps` still contains its own identical while-loop + local `_FS_CASE_INSENSITIVE`. The algorithms match today (so no path-map mismatch), but the duplication is the incomplete half of the shared-helper extraction from PR #29 and is the same class of residual that previously allowed case-path drift.
-
-**Impact**  
-Maintainability risk; future uniqueness policy changes must be applied in two places or the case-path-map class of bugs can reappear. Completing the wiring also clears the corresponding Recommended item in `TODO_REFACTORING.md`.
-
-### 2. Fragile `interesting.py` property-name extraction
+### 1. Fragile `interesting.py` property-name extraction
 
 The interesting-properties list is extracted from the Luau source with a simple regex that matches double-quoted strings. Any future double-quoted string that is not a property name (comments, string literals inside the module, etc.) will pollute the list, and legitimate property names written with single quotes or concatenation will be missed. The current `luau/interesting_properties.luau` is a clean flat table, so behaviour is correct today, but the extractor remains brittle.
 
 **Impact**  
 Incorrect or incomplete “interesting” flatten set if the Luau source changes style; search/set surface becomes unreliable.
 
-### 3. Child order not preserved on Python full rebuild / import
+### 2. Child order not preserved on Python full rebuild / import
 
 `build.py` `process_directory` walks the filesystem with `sorted(iterdir())`. Roblox instance child order is therefore not restored on full rebuild. Differential import also leaves existing place children in their original order and does not re-order them to match the folder. Usually harmless for scripts, but prevents byte-identical round-trips and can affect order-sensitive behaviour (UI lists, some collection patterns).
 
 **Impact**  
 Non-identical rebuilds; rare behavioural differences for order-dependent instances.
 
-### 4. Selective `--tag` / keep-map future-proofing for unknown Tags forms
+### 3. Selective `--tag` / keep-map future-proofing for unknown Tags forms
 
 After the SharedString decode work, `_item_has_tag` and extract correctly populate `meta["Tags"]` for all currently supported forms. Selective export itself is correct. Residual observation: if a place ever stores Tags exclusively in a form the shared decoder does not yet recognise, the keep-map would still treat the instance as untagged. No additional forms are known today; this item exists so the decoder remains the single source of truth for any future Tags variants.
 
 **Impact**  
 Future-proofing note only; no current incorrect behaviour.
 
-### 5. Residual notes from prior scans still worth monitoring
+### 4. Residual notes from prior scans still worth monitoring
 
 - Live Sync “N file(s) had no matching script” noise after renames remains expected until Referent healing (TODO_FEATURES I1).
 - Import auto-create still requires the parent path to already exist in the place (full grafting is feature work under selective extract residual).
@@ -83,8 +76,9 @@ These behaviours are deliberate and should not be “fixed” without an explici
 
 ## Remaining minor / edge-case notes
 
-- Full-rebuild child order (Open #3) is the only remaining order-related item; differential import intentionally does not reorder existing place children.
+- Full-rebuild child order (Open #2) is the only remaining order-related item; differential import intentionally does not reorder existing place children.
 - Bridge manifest write failures are now surfaced (Previously corrected #21).
+- Shared uniqueness helper is now fully wired in both extract and build (Previously corrected #22).
 
 ---
 
@@ -113,6 +107,7 @@ These correctness problems were fixed during development and are no longer prese
 19. Plugin actions (Set/Replace, Rename tag, Restore scripts, Live Sync apply) now surface a status note when `ChangeHistoryService:TryBeginRecording` returns nil (playtest mode, concurrent recording, etc.). The change still applies; the user is informed that no undo waypoint was created.
 20. Tags stored as SharedString are now decoded on extract (and visible to selective `--tag`). `decode_tags_from_prop` / `decode_tags_from_structured` handle BinaryString, string/ProtectedString, and SharedString forms; extract_properties and `_item_has_tag` both use the shared helpers. Residual Tags-decoding duplication inside extract was removed. (PR #29)
 21. Bridge `write_manifest` / `mark_applied` no longer swallow exceptions silently. Both paths now print a short diagnostic (same style as other bridge `!` lines) when the on-disk manifest write fails, while still continuing so the live path stays robust. (PR #32)
+22. `build.py` `_build_instance_maps` now uses the shared `claim_unique_name` helper from `xml_props.py` (and no longer carries a private `_FS_CASE_INSENSITIVE` + while-loop). Completes the shared-helper extraction begun in PR #29; export and import path uniqueness are now a single source of truth. (this PR)
 
 ---
 
