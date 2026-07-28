@@ -292,6 +292,7 @@ local function applyDirtyPaths(paths: { string })
 	end
 
 	local recording = ChangeHistoryService:TryBeginRecording("Verde Live Sync")
+	local recordingOk = recording ~= nil
 	local applied, noMatch = 0, 0
 
 	applyingFromBridge = true
@@ -340,6 +341,7 @@ local function applyDirtyPaths(paths: { string })
 	end
 	Verde.bridgePost("/applied", { paths = paths })
 
+	local undoNote = if not recordingOk then "\n(No undo waypoint: playtest or concurrent recording.)" else ""
 	if noMatch > 0 then
 		setLiveStatus(
 			string.format(
@@ -347,11 +349,11 @@ local function applyDirtyPaths(paths: { string })
 					.. "Tip: names/paths must match the export, or re-export after renames.",
 				applied,
 				noMatch
-			),
+			) .. undoNote,
 			noMatch > applied
 		)
 	else
-		setLiveStatus(string.format("Synced %d script change(s). Watching…", applied))
+		setLiveStatus(string.format("Synced %d script change(s). Watching…", applied) .. undoNote)
 	end
 end
 
@@ -668,6 +670,8 @@ setBtn.MouseButton1Click:Connect(function()
 	end
 	if recording then
 		ChangeHistoryService:FinishRecording(recording, Enum.FinishRecordingOperation.Commit)
+	else
+		setStatus.Text = setStatus.Text .. "\n(No undo: playtest or concurrent recording active)"
 	end
 end)
 
@@ -734,6 +738,8 @@ renameTagBtn.MouseButton1Click:Connect(function()
 	end
 	if recording then
 		ChangeHistoryService:FinishRecording(recording, Enum.FinishRecordingOperation.Commit)
+	else
+		tagStatus.Text = tagStatus.Text .. "\n(No undo: playtest or concurrent recording active)"
 	end
 end)
 
@@ -768,6 +774,9 @@ restoreBtn.MouseButton1Click:Connect(function()
 		ChangeHistoryService:FinishRecording(recording, Enum.FinishRecordingOperation.Commit)
 	end
 	scriptStatus.Text = string.format("Restored %d (created %d, skipped %d)", restored, created, skipped)
+	if not recording then
+		scriptStatus.Text = scriptStatus.Text .. "\n(No undo: playtest or concurrent recording active)"
+	end
 end)
 
 toggleBtn.Click:Connect(function()
