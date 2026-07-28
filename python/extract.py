@@ -27,6 +27,9 @@ search, and edit.
 - Machine-local Referent is written to *.robloxmeta.local.json (gitignored),
   never into the shared .robloxmeta.json that is checked into VCS.
 - A top-level .gitignore is created/updated so *.robloxmeta.local.json is ignored.
+- The top-level `.ai` directory is reserved for AI agent notes: it is created
+  (with a short README) if missing, and is never pruned, cleaned, or overwritten
+  by export.
 """
 
 from __future__ import annotations
@@ -42,7 +45,9 @@ from typing import Any
 
 from attributes import decode_attributes
 from features.meta import (
+    AI_NOTES_DIRNAME,
     LOCAL_META_KEYS,
+    is_under_ai_notes,
     local_meta_path,
     save_local_meta,
     split_local_keys,
@@ -70,6 +75,39 @@ _DEFAULT_GITIGNORE = """\
 # These files are useful on the machine that produced the export but churn
 # across Studio saves and must not be checked into version control.
 *.robloxmeta.local.json
+"""
+
+_AI_NOTES_README = """\
+# AI Agent Notes (`.ai/`)
+
+This top-level directory is reserved for **AI agent notes** on a Verde-extracted
+project tree. It exists whether or not the project already contains any
+Verde-specific notes, plans, or agent history.
+
+## What this folder is for
+
+- Scratchpads, observations, architecture notes, and decisions made while an
+  AI agent analyses or edits this tree.
+- Cross-session context that helps future agents (or the same agent later)
+  understand the project without re-deriving everything from scratch.
+- Anything that improves long-term project understanding and is **not** Roblox
+  instance data (scripts, properties, tags, attributes, hierarchy).
+
+You are encouraged to leave **valuable, durable notes** here. Prefer concise
+summaries of structure, non-obvious conventions, known pitfalls, and open
+questions over ephemeral chat logs. Future analysis benefits from durable
+context more than from raw transcripts.
+
+## Guarantees from Verde
+
+- **`verde-import` / `verde-merge`** never import anything under `.ai/` into a
+  place file or into Roblox Studio.
+- **`verde-export`** never deletes, prunes, or overwrites the contents of this
+  directory. Re-exports leave your notes intact.
+- Files here are not tracked in `.verde/manifest.json`.
+
+This folder is intentionally outside the Roblox instance tree so agent context
+stays on disk with the project and stays out of Studio.
 """
 
 
@@ -250,12 +288,22 @@ def _prune_empty_dirs(root: Path) -> int:
             try:
                 for child in dir_path.iterdir():
                     if child.is_dir():
+                        # Never descend into / prune the AI agent notes tree.
+                        if child.name == AI_NOTES_DIRNAME and dir_path == root:
+                            continue
+                        if is_under_ai_notes(child, root):
+                            continue
                         stack.append((child, False))
             except OSError:
                 pass
             continue
 
         if dir_path == root:
+            continue
+        # Never remove the AI notes directory itself (even if empty).
+        if dir_path.name == AI_NOTES_DIRNAME and dir_path.parent == root:
+            continue
+        if is_under_ai_notes(dir_path, root):
             continue
         try:
             if not any(dir_path.iterdir()):
@@ -279,11 +327,18 @@ def _cleanup_orphaned_uniquified(root: Path, written: dict[Path, set[str]]) -> i
     for parent, used in written.items():
         if not parent.is_dir():
             continue
+        # Never touch the AI agent notes tree.
+        if parent.name == AI_NOTES_DIRNAME and parent.parent == root:
+            continue
+        if is_under_ai_notes(parent, root):
+            continue
         try:
             entries = list(parent.iterdir())
         except OSError:
             continue
         for entry in entries:
+            if is_under_ai_notes(entry, root):
+                continue
             stem = entry.name
             for ext in SCRIPT_EXTS + (".robloxmeta.json", ".robloxmeta.local.json"):
                 if entry.name.endswith(ext):
@@ -401,6 +456,26 @@ def _ensure_gitignore(root: Path) -> str:
         existing += "\n"
     path.write_text(existing + block, encoding="utf-8")
     return "updated"
+
+
+def _ensure_ai_notes_dir(root: Path) -> str:
+    """Ensure the top-level AI agent notes directory exists with a README.
+
+    Returns "created" | "updated" | "unchanged".
+    """
+    ai = root / AI_NOTES_DIRNAME
+    try:
+        ai.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return "unchanged"
+    readme = ai / "README.md"
+    if readme.is_file():
+        return "unchanged"
+    try:
+        readme.write_text(_AI_NOTES_README, encoding="utf-8")
+        return "created"
+    except OSError:
+        return "unchanged"
 
 
 def extract(
@@ -597,6 +672,14 @@ def extract(
     except OSError as exc:
         print(f"  (.gitignore not written: {exc})")
 
+    # Ensure the AI agent notes directory exists and is never wiped.
+    try:
+        ai_status = _ensure_ai_notes_dir(out)
+        if ai_status == "created":
+            print(f"  {AI_NOTES_DIRNAME}/ : created (AI agent notes; never imported)")
+    except OSError as exc:
+        print(f"  ({AI_NOTES_DIRNAME}/ not ensured: {exc})")
+
     if root_filter or tag_filter:
         partial = {
             "root": root_filter,
@@ -627,7 +710,8 @@ def main() -> None:
             "Existing paths are reused; files are overwritten only when content differs. "
             "Use --root / --tag for selective (partial) exports. "
             "Referent is written only to machine-local *.robloxmeta.local.json (gitignored). "
-            "A top-level .gitignore is created/updated to ignore those local files."
+            "A top-level .gitignore is created/updated to ignore those local files. "
+            "The top-level .ai/ directory is reserved for AI agent notes and is never wiped."
         )
     )
     parser.add_argument("rbxlx", help="Path to .rbxlx file")

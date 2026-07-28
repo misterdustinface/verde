@@ -25,9 +25,12 @@ On every successful export, Verde also ensures a top-level `.gitignore` in the e
 **Selective export**  
 `--root PATH` (dot-separated Names, e.g. `ServerScriptService` or `Workspace.MyModel`) starts the export from that instance as the top of the output tree. `--tag TAG` keeps only instances that carry the tag (or ancestors of tagged instances) so hierarchy is preserved. Both combine with the scripts-only keep map. A `.verde/partial.json` records the filter for future import grafting.
 
+**AI agent notes directory**  
+Every successful export ensures a top-level `.ai/` directory exists (with a short README if newly created). This directory is reserved for notes written by AI agents. Export never prunes, cleans, or overwrites anything under `.ai/`. Import / merge never treat paths under `.ai/` as Roblox instances (see feature 15).
+
 **Key components**  
-- `python/extract.py` (iterative stack walk + progress, keep-map, prune, selective root/tag, local-meta split, `.gitignore` ensure)
-- `python/features/meta.py` (`load_meta_merged`, `save_local_meta`, `split_local_keys`)
+- `python/extract.py` (iterative stack walk + progress, keep-map, prune, selective root/tag, local-meta split, `.gitignore` ensure, `.ai` ensure)
+- `python/features/meta.py` (`load_meta_merged`, `save_local_meta`, `split_local_keys`, `AI_NOTES_DIRNAME`, `is_under_ai_notes`)
 - `python/attributes.py` (AttributesSerialize decode)
 - `python/interesting.py` + `luau/interesting_properties.luau`
 
@@ -46,7 +49,7 @@ Bypasses the clean-manifest / mtime-win skip logic. Every matching folder entry 
 ### 3. Offline touched-file tracking + mtime-win merge (`verde-merge`)
 
 **Description**  
-Uses `.verde/manifest.json` (zlib.adler32 numeric hash + mtime) written by export. Import/merge can skip clean files. When both sides changed the same logical content, the most-recently-modified side wins. Dry-run supported. Foundation for a future git-merge-style conflict path. Machine-local `*.robloxmeta.local.json` files are never tracked in the manifest.
+Uses `.verde/manifest.json` (zlib.adler32 numeric hash + mtime) written by export. Import/merge can skip clean files. When both sides changed the same logical content, the most-recently-modified side wins. Dry-run supported. Foundation for a future git-merge-style conflict path. Machine-local `*.robloxmeta.local.json` files are never tracked in the manifest. The top-level `.ai/` AI agent notes directory is never tracked either.
 
 **Key components**  
 - `python/features/sync.py`
@@ -137,6 +140,7 @@ Foundation for partial place exports. `--root PATH` limits the export to a named
 
 **Key components**  
 - `python/extract.py`
+
 ### 14. Interactive case disambiguation for set/replace and tags
 
 **Description**  
@@ -145,6 +149,23 @@ When a case-insensitive discovery filter yields multiple distinct original-cased
 **Key components**  
 - `python/features/set_replace.py`, `python/features/tags.py`
 - `plugin/VerdePlugin.server.luau`
+
+### 15. Top-level `.ai` AI agent notes directory
+
+**Description**  
+Defines a reserved top-level directory `.ai` for notes written by AI agents working on an extracted Verde tree. Behaviour:
+
+- **Export (`verde-export`)**: ensures `.ai/` exists (creates it with a short README if missing). Never prunes empty dirs inside it, never runs orphan-uniquify cleanup on it, and never overwrites any of its contents.
+- **Import (`verde-import` / full rebuild / differential)**: never walks `.ai/` for candidates. `walk_metas` and bare-script discovery both skip paths under `.ai/`. Full-rebuild `process_directory` also skips the directory name.
+- **Manifest / merge**: files under `.ai/` are never recorded in `.verde/manifest.json` and never considered dirty.
+
+This keeps agent scratchpads, plans, and observations out of Roblox Studio while preserving them across re-exports.
+
+**Key components**  
+- `python/features/meta.py` (`AI_NOTES_DIRNAME`, `is_under_ai_notes`)
+- `python/extract.py` (`_ensure_ai_notes_dir`, protected prune/cleanup)
+- `python/build.py` (explicit skips)
+- `python/features/sync.py` (manifest exclusion)
 
 ---
 
