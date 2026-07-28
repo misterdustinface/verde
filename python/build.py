@@ -61,7 +61,6 @@ from __future__ import annotations
 import argparse
 import base64
 import json
-import platform
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -69,10 +68,15 @@ from typing import Any
 
 from attributes import decode_attributes, encode_attributes_b64
 from features.meta import load_meta_merged, walk_metas
-from xml_props import sanitize_name, parse_children, parse_property_element, decode_tags_from_prop
+from xml_props import (
+    claim_unique_name,
+    decode_tags_from_prop,
+    parse_children,
+    parse_property_element,
+    sanitize_name,
+)
 
 
-_FS_CASE_INSENSITIVE = platform.system() in ("Darwin", "Windows")
 _UNIQUIFY_RE = re.compile(r"^(.+)_([0-9]+)$")
 
 
@@ -330,14 +334,7 @@ def _build_instance_maps(
             taken[parent_id] = set()
         used = taken[parent_id]
 
-        fs_name = fs_base
-        counter = 1
-        key = fs_name.casefold() if _FS_CASE_INSENSITIVE else fs_name
-        while key in used:
-            counter += 1
-            fs_name = f"{fs_base}_{counter}"
-            key = fs_name.casefold() if _FS_CASE_INSENSITIVE else fs_name
-        used.add(key)
+        fs_name = claim_unique_name(fs_base, used)
 
         full_path = f"{current_path}/{fs_name}" if current_path else fs_name
         path_map[full_path] = item
