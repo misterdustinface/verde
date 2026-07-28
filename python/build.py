@@ -23,7 +23,10 @@ the place and deep trees whose parents were never exported.
 Bare script files (.lua / .local.lua / .module.lua) that lack a companion
 .robloxmeta.json are also discovered and treated as new candidates (defaults
 invented from the filename). This matches full-rebuild behaviour and prevents
-hand-added or AI-generated scripts from being silently ignored.
+hand-added or AI-generated scripts from being silently ignored. The invented
+Name is always written both as Item@name and as the Name property so Studio
+preserves it (property is the source of truth; attribute alone can be reset
+to ClassName).
 
 Clean (manifest / mtime-win) only skips when the place *still has* a matching
 Item. A disk entry that is absent from the place is always treated as a create
@@ -191,6 +194,17 @@ def add_properties(
     if isinstance(tags, str):
         tags = [tags] if tags else []
 
+    # Studio treats the Name *property* as source of truth. Item@name alone can
+    # be ignored / reset to ClassName on open. Always emit the property when we
+    # know the intended name (from top-level meta or from structured Properties).
+    name_val = meta.get("Name")
+    if name_val is None and isinstance(full.get("Name"), dict):
+        name_val = full["Name"].get("value")
+    if name_val is not None and str(name_val) and "Name" not in full:
+        el = ET.SubElement(props, "string")
+        el.set("name", "Name")
+        el.text = str(name_val)
+
     for prop_name, structured in full.items():
         if prop_name == "Source":
             continue
@@ -224,7 +238,7 @@ def add_properties(
         el.set("name", "AttributesSerialize")
         el.text = b64
 
-    already = set(full.keys()) | {"Source", "Tags", "AttributesSerialize"}
+    already = set(full.keys()) | {"Source", "Tags", "AttributesSerialize", "Name"}
     for key, val in meta.items():
         if key in ("ClassName", "Name", "Tags", "Attributes", "Properties", "Referent") or key in already:
             continue
@@ -627,6 +641,8 @@ def _create_item_from_meta(
 
     UniqueId is deliberately omitted so Studio assigns a fresh one on open.
     Referent from meta is kept so subsequent imports can match by Referent.
+    Name is written both as Item@name and (via add_properties) as the Name
+    property so Studio keeps the intended name instead of resetting to ClassName.
     """
     class_name = str(meta.get("ClassName") or ("ModuleScript" if source is not None else "Folder"))
     name = str(meta.get("Name") or leaf_name or "Unnamed")
@@ -638,6 +654,7 @@ def _create_item_from_meta(
         item.set("referent", str(meta["Referent"]))
 
     create_meta = dict(meta)
+    create_meta["Name"] = name  # ensure top-level Name reaches add_properties
     props = dict(create_meta.get("Properties") or {})
     props.pop("UniqueId", None)
     create_meta["Properties"] = props
