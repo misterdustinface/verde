@@ -2,7 +2,7 @@
 """
 verde test_roundtrip.py
 
-Tests extract + build round-trip for .rbxlx files.
+Tests export + build round-trip for .rbxlx files.
 """
 
 from __future__ import annotations
@@ -19,12 +19,12 @@ from pathlib import Path
 
 
 def run_extract(input_rbxlx: str, output_dir: str) -> None:
-    print(f"[1/4] Extracting {input_rbxlx} ...")
+    print(f"[1/4] Exporting {input_rbxlx} ...")
     # --all is required for a complete round-trip (default is now scripts-only)
     try:
-        from extract import extract
+        from export import export
 
-        extract(input_rbxlx, output_dir, scripts_only=False)
+        export(input_rbxlx, output_dir, scripts_only=False)
         return
     except ImportError:
         pass
@@ -33,7 +33,7 @@ def run_extract(input_rbxlx: str, output_dir: str) -> None:
     cmd = [
         sys.executable,
         "-m",
-        "extract",
+        "export",
         input_rbxlx,
         output_dir,
         "--all",
@@ -41,13 +41,13 @@ def run_extract(input_rbxlx: str, output_dir: str) -> None:
     rc = subprocess.call(cmd)
     if rc != 0:
         # Last-ditch relative script path (repo root layout)
-        script = Path(__file__).resolve().parent / "extract.py"
+        script = Path(__file__).resolve().parent / "export.py"
         if script.is_file():
             rc = subprocess.call(
                 [sys.executable, str(script), input_rbxlx, output_dir, "--all"]
             )
     if rc != 0:
-        raise RuntimeError("extract failed")
+        raise RuntimeError("export failed")
 
 
 def run_build(input_dir: str, output_rbxlx: str) -> None:
@@ -71,7 +71,7 @@ def run_build(input_dir: str, output_rbxlx: str) -> None:
 
 
 def _resolve_name(item: ET.Element) -> str:
-    """Mirror extract._resolve_name / build._resolve_item_name.
+    """Mirror export._resolve_name / build._resolve_item_name.
 
     Real Studio .rbxlx files put Name only as a property; the Item@name
     attribute is usually absent. Prefer the property, then the attribute,
@@ -89,7 +89,7 @@ def _resolve_name(item: ET.Element) -> str:
 
 
 def _decode_tags_prop(prop: ET.Element) -> list[str]:
-    """Decode a Tags property the same way extract does."""
+    """Decode a Tags property the same way export does."""
     text = (prop.text or "").strip()
     if not text:
         return []
@@ -318,7 +318,7 @@ def test_roundtrip(original_rbxlx: str, keep: bool = False) -> bool:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Test Verde extract/build round-trip")
+    parser = argparse.ArgumentParser(description="Test Verde export/build round-trip")
     parser.add_argument("rbxlx", help="Path to a .rbxlx place file")
     parser.add_argument(
         "--keep", action="store_true", help="Keep the temporary test directory"
