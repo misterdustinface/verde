@@ -36,19 +36,33 @@ Incorrect or incomplete “interesting” flatten set if the Luau source changes
 **Impact**  
 Non-identical rebuilds; rare behavioural differences for order-dependent instances.
 
-### 3. Selective `--tag` / keep-map future-proofing for unknown Tags forms
+### 3. Attributes decode stops at first unknown type_id
+
+`attributes.decode_attributes` aborts the remaining attribute list as soon as it encounters an unrecognised type ID (it cannot safely skip a variable-length value). Later attributes in the same `AttributesSerialize` payload are therefore lost on extract. Encode also skips any `__type` that begins with `Unknown_`.
+
+**Impact**  
+Partial Attributes loss on places that use newer or rare attribute types; round-trip fidelity degrades for those instances.
+
+### 4. Root-level non-Item elements dropped on full rebuild
+
+Full extract + build (and differential create paths) do not preserve top-level children of the `<roblox>` root other than `Item`s (`SharedStrings` table, `Meta`, `External*`, etc.). Tags that were SharedString references are re-emitted as BinaryString (so the common Tags case survives), but any other property that remains a SharedString md5 key, or any place that relies on the root SharedStrings table / Meta / External references, will lose those elements after a rebuild.
+
+**Impact**  
+Data loss / dangling references for places that use SharedString for non-Tags properties or that depend on root Meta/External. Full preservation is also tracked as APPROVED work in TODO_FEATURES; the current behaviour is still a correctness gap for those places.
+
+### 5. Live Sync “no matching script” noise after renames / stale Referent
+
+When a script is renamed in Studio or the on-disk meta still carries a stale Referent/UniqueId, the bridge path-matching falls back to name/path and reports “N file(s) had no matching script”. The count is surfaced (not silent), but large places accumulate noise and require a re-export or manual healing. Full Referent/UniqueId healing is tracked as I1 in TODO_FEATURES; until then this remains a residual robustness gap in the live path.
+
+**Impact**  
+Operational friction / status noise on Live Sync after renames; no automatic data loss, but users can miss real mismatches among the noise.
+
+### 6. Selective `--tag` keep-map residual risk for unknown Tags forms
 
 After the SharedString decode work, `_item_has_tag` and extract correctly populate `meta["Tags"]` for all currently supported forms. Selective export itself is correct. Residual observation: if a place ever stores Tags exclusively in a form the shared decoder does not yet recognise, the keep-map would still treat the instance as untagged. No additional forms are known today; this item exists so the decoder remains the single source of truth for any future Tags variants.
 
 **Impact**  
-Future-proofing note only; no current incorrect behaviour.
-
-### 4. Residual notes from prior scans still worth monitoring
-
-- Live Sync “N file(s) had no matching script” noise after renames remains expected until Referent healing (TODO_FEATURES I1).
-- Attributes search/filter + Luau wrappers remain open feature work, not defects in the binary round-trip.
-
-These are not elevated as independent Open issues today but are retained here so residual scans continue to see them.
+Future-proofing; no current incorrect behaviour observed.
 
 ---
 
@@ -78,6 +92,7 @@ These behaviours are deliberate and should not be “fixed” without an explici
 - Full-rebuild child order (Open #2) is the only remaining order-related item; differential import intentionally does not reorder existing place children.
 - Bridge manifest write failures are now surfaced (Previously corrected #21).
 - Shared uniqueness helper is now fully wired in both extract and build (Previously corrected #22).
+- Attributes unknown-type early-stop (Open #3) is the main residual Attributes edge case; known types round-trip fully.
 
 ---
 
