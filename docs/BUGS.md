@@ -22,28 +22,21 @@ When Open issues is empty, contains only “None currently.”, or is sparse (ro
 
 ## Open issues
 
-### 1. Plugin: no user feedback when `ChangeHistoryService:TryBeginRecording` returns nil
-
-Several plugin actions (Set/Replace, Rename tag, Restore scripts, Live Sync apply) call `TryBeginRecording`. When it returns `nil` (playtest mode, concurrent recording, etc.) the action still proceeds but no undo waypoint is created and the user receives no status-line indication.
-
-**Impact**  
-Silent loss of undo history; user may believe a change is undoable when it is not.
-
-### 2. Tags stored as SharedString are not decoded on extract
+### 1. Tags stored as SharedString are not decoded on extract
 
 `extract.py` only decodes the Tags property when its type is BinaryString, string, or ProtectedString. When Tags appears as a SharedString (rare but legal in some place formats), the value stays in the full Properties map and `meta["Tags"]` remains empty. Rebuild therefore does not re-emit a proper Tags BinaryString.
 
 **Impact**  
 Tags are lost on a round-trip for places that use the SharedString form.
 
-### 3. Fragile `interesting.py` property-name extraction
+### 2. Fragile `interesting.py` property-name extraction
 
 The interesting-properties list is extracted from the Luau source with a simple regex that matches double-quoted strings. Any future double-quoted string that is not a property name (comments, string literals inside the module, etc.) will pollute the list, and legitimate property names written with single quotes or concatenation will be missed.
 
 **Impact**  
 Incorrect or incomplete “interesting” flatten set; search/set surface becomes unreliable if the Luau source changes style.
 
-### 4. Child order not preserved on Python import
+### 3. Child order not preserved on Python import
 
 `build.py` / import walks the filesystem with `iterdir()`, whose order is not guaranteed and is typically sorted. Roblox instance child order is therefore not restored. Usually harmless for scripts, but prevents byte-identical round-trips and can affect order-sensitive behaviour (UI lists, some collection patterns).
 
@@ -103,6 +96,7 @@ These correctness problems were fixed during development and are no longer prese
 16. Differential import (including `--force`) no longer imports redundant on-disk entries that caused Studio “DM contains duplicate Unique ids”. Candidates that share a Referent, share a UniqueId in meta, or look like Name_N leftovers of a bare Name sibling (with no distinct Referent) are skipped before any place Item is updated. Each place Item is applied at most once per run. The place Item’s existing UniqueId is still preserved as a safety net. We do not invent or regenerate UniqueIds for disk duplicates — the redundant files simply are not imported.
 17. MeshPart MeshId / TextureID (and similar Content properties) that use a child `<url>` element are no longer dropped on extract/import. `parse_property_element` previously treated Content as pure text and discarded children, so MeshId became empty on re-emit and MeshParts failed to load in Studio. Content / SharedString / Ref now keep the children structure when present.
 18. Differential import path_key for ModuleScript / LocalScript companion metas (`Name.module.robloxmeta.json` / `Name.local.robloxmeta.json`) no longer includes the type suffix. Previously path_key ended in `…/Name.module` while the place path_map used the instance Name (`…/Name`), so the path fallback never matched and Sources were skipped whenever Referent was missing or stale. Fixed by stripping a trailing `.module` / `.local` when building the hierarchy key (PR #24).
+19. Plugin actions (Set/Replace, Rename tag, Restore scripts, Live Sync apply) now surface a status note when `ChangeHistoryService:TryBeginRecording` returns nil (playtest mode, concurrent recording, etc.). The change still applies; the user is informed that no undo waypoint was created.
 
 ---
 
