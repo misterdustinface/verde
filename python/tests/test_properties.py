@@ -1,4 +1,4 @@
-"""Unit tests for Verde property extraction / emission and Tags handling.
+"""Unit tests for Verde property export / emission and Tags handling.
 
 Stronger coverage: multiple property types, hierarchy, interesting-props overrides,
 empty Tags, CFrame, sequences, and edge cases.
@@ -13,7 +13,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-import extract
+import export
 import build
 
 
@@ -37,7 +37,7 @@ def test_string_and_bool_roundtrip(tmp_path: Path):
     src = tmp_path / "in.rbxlx"
     src.write_text(xml, encoding="utf-8")
     out = tmp_path / "extracted"
-    extract.extract(str(src), str(out))
+    export.export(str(src), str(out))
 
     meta = json.loads((out / "TestPart" / ".robloxmeta.json").read_text())
     assert meta["ClassName"] == "Part"
@@ -77,7 +77,7 @@ def test_vector3_and_color3(tmp_path: Path):
     src = tmp_path / "in.rbxlx"
     src.write_text(xml, encoding="utf-8")
     out = tmp_path / "extracted"
-    extract.extract(str(src), str(out))
+    export.export(str(src), str(out))
 
     meta = json.loads((out / "TestPart" / ".robloxmeta.json").read_text())
     pos = meta["Properties"]["Position"]
@@ -120,7 +120,7 @@ def test_coordinateframe(tmp_path: Path):
     src = tmp_path / "in.rbxlx"
     src.write_text(xml, encoding="utf-8")
     out = tmp_path / "extracted"
-    extract.extract(str(src), str(out))
+    export.export(str(src), str(out))
 
     meta = json.loads((out / "TestPart" / ".robloxmeta.json").read_text())
     cf = meta["Properties"]["CFrame"]
@@ -158,7 +158,7 @@ def test_numbersequence(tmp_path: Path):
     src = tmp_path / "in.rbxlx"
     src.write_text(xml, encoding="utf-8")
     out = tmp_path / "extracted"
-    extract.extract(str(src), str(out))
+    export.export(str(src), str(out))
 
     meta = json.loads((out / "TestPart" / ".robloxmeta.json").read_text())
     seq = meta["Properties"]["Transparency"]
@@ -180,7 +180,7 @@ def test_tags_binarystring(tmp_path: Path):
     src = tmp_path / "in.rbxlx"
     src.write_text(xml, encoding="utf-8")
     out = tmp_path / "extracted"
-    extract.extract(str(src), str(out))
+    export.export(str(src), str(out))
 
     meta = json.loads((out / "TestPart" / ".robloxmeta.json").read_text())
     assert meta["Tags"] == tags
@@ -199,7 +199,7 @@ def test_empty_tags(tmp_path: Path):
     src = tmp_path / "in.rbxlx"
     src.write_text(xml, encoding="utf-8")
     out = tmp_path / "extracted"
-    extract.extract(str(src), str(out))
+    export.export(str(src), str(out))
 
     meta = json.loads((out / "TestPart" / ".robloxmeta.json").read_text())
     assert meta["Tags"] == []
@@ -223,7 +223,7 @@ def test_script_source_extracted(tmp_path: Path):
     src = tmp_path / "in.rbxlx"
     src.write_text(xml, encoding="utf-8")
     out = tmp_path / "extracted"
-    extract.extract(str(src), str(out))
+    export.export(str(src), str(out))
 
     script_file = out / "MyModule.module.lua"
     assert script_file.is_file()
@@ -250,7 +250,7 @@ def test_interesting_props_override(tmp_path: Path):
     src = tmp_path / "in.rbxlx"
     src.write_text(xml, encoding="utf-8")
     out = tmp_path / "extracted"
-    extract.extract(str(src), str(out), interesting={"SoundId"})
+    export.export(str(src), str(out), interesting={"SoundId"})
 
     meta = json.loads((out / "TestPart" / ".robloxmeta.json").read_text())
     assert meta.get("SoundId") == "rbxassetid://999"
@@ -286,7 +286,7 @@ def test_nested_hierarchy(tmp_path: Path):
     src = tmp_path / "in.rbxlx"
     src.write_text(xml, encoding="utf-8")
     out = tmp_path / "extracted"
-    extract.extract(str(src), str(out))
+    export.export(str(src), str(out))
 
     assert (out / "RootFolder" / ".robloxmeta.json").is_file()
     assert (out / "RootFolder" / "ChildPart" / ".robloxmeta.json").is_file()
@@ -321,7 +321,7 @@ def test_script_with_tags(tmp_path: Path):
     src = tmp_path / "in.rbxlx"
     src.write_text(xml, encoding="utf-8")
     out = tmp_path / "extracted"
-    extract.extract(str(src), str(out))
+    export.export(str(src), str(out))
 
     script_file = out / "Handler.local.lua"
     assert script_file.is_file()
@@ -369,7 +369,7 @@ def test_name_from_property_only(tmp_path: Path):
     src = tmp_path / "in.rbxlx"
     src.write_text(xml, encoding="utf-8")
     out = tmp_path / "extracted"
-    extract.extract(str(src), str(out))
+    export.export(str(src), str(out))
 
     # Filesystem must use the real Names, not Unnamed
     assert (out / "Workspace" / ".robloxmeta.json").is_file()
@@ -442,16 +442,16 @@ def test_scripts_only_prunes_non_script_leaves(tmp_path: Path):
     src = tmp_path / "in.rbxlx"
     src.write_text(xml, encoding="utf-8")
 
-    # Full extract still has everything
+    # Full export still has everything
     full = tmp_path / "full"
-    extract.extract(str(src), str(full), scripts_only=False)
+    export.export(str(src), str(full), scripts_only=False)
     assert (full / "Workspace" / "Baseplate" / ".robloxmeta.json").is_file()
     assert (full / "Workspace" / "Systems" / "OnlyGeometry" / "Decoration" / ".robloxmeta.json").is_file()
     assert (full / "Workspace" / "Systems" / "Bootstrap.lua").is_file()
 
     # scripts-only: pure geometry gone; script path retained
     code = tmp_path / "code"
-    extract.extract(str(src), str(code), scripts_only=True)
+    export.export(str(src), str(code), scripts_only=True)
 
     assert (code / "Workspace" / ".robloxmeta.json").is_file()
     assert (code / "Workspace" / "Systems" / ".robloxmeta.json").is_file()
