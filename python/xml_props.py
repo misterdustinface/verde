@@ -11,8 +11,12 @@ smaller / more readable.
 from __future__ import annotations
 
 import base64
+import platform
 import xml.etree.ElementTree as ET
 from typing import Any
+
+
+FS_CASE_INSENSITIVE = platform.system() in ("Darwin", "Windows")
 
 
 def sanitize_name(name: str) -> str:
@@ -22,6 +26,24 @@ def sanitize_name(name: str) -> str:
         name = name.replace(char, "_")
     name = name.strip()
     return name or "Unnamed"
+
+
+def claim_unique_name(base: str, claimed: set[str]) -> str:
+    """Return a unique filesystem name, mutating *claimed*.
+
+    On case-insensitive filesystems the key is casefolded so Foo / foo
+    cannot collide. The returned name is the first free variant
+    (base, base_2, base_3, …).
+    """
+    name = base
+    counter = 1
+    key = name.casefold() if FS_CASE_INSENSITIVE else name
+    while key in claimed:
+        counter += 1
+        name = f"{base}_{counter}"
+        key = name.casefold() if FS_CASE_INSENSITIVE else name
+    claimed.add(key)
+    return name
 
 
 def parse_children(elem: ET.Element) -> dict[str, Any]:
@@ -94,17 +116,78 @@ def parse_property_element(prop: ET.Element) -> dict[str, Any]:
     return result
 
 
+def _decode_tags_text(text: str) -> list[str]:
+    """Split a Tags string (comma or null separated) into a clean list."""
+    return [t.strip() for t in text.replace("\0", ",").split(",") if t.strip()]
+
+
+def _decode_tags_binary(raw: str) -> list[str]:
+    """Decode a base64 BinaryString Tags value (null-separated UTF-8)."""
+    cleaned = (raw or "").replace("\n", "").replace(" ", "")
+    try:
+        data = base64.b64decode(cleaned)
+        return [t.decode("utf-8", errors="replace") for t in data.split(b"\0") if t]
+    except Exception:
+        return []
+
+
 def decode_tags_from_prop(prop: ET.Element) -> list[str]:
     """
-    Decode Tags from either BinaryString (null-separated UTF-8) or
-    string/ProtectedString (comma or null separated). Returns [] on failure.
+    Decode Tags from BinaryString, string/ProtectedString, or SharedString.
+    Returns [] on failure or empty.
     """
     if prop.tag == "BinaryString":
-        raw = (prop.text or "").replace("\n", "").replace(" ", "")
-        try:
-            data = base64.b64decode(raw)
-            return [t.decode("utf-8", errors="replace") for t in data.split(b"\0") if t]
-        except Exception:
-            return []
-    text = prop.text or ""
-    return [t.strip() for t in text.replace("\0", ",").split(",") if t.strip()]
+        return _decode_tags_binary(prop.text or "")
+    # SharedString may carry the payload as text or as a child.
+    if prop.tag == "SharedString":
+        if prop.text and prop.text.strip():
+            return _decode_tags_text(prop.text)
+        for child in prop:
+            if child.text and child.text.strip():
+                try:
+                    return _decode_tags_binary(child.text)
+                except Exception:
+                    return _decode_tags_text(child.text)
+        return []
+    # string / ProtectedString / anything else with text
+    return _decode_tags_text(prop.text or "")
+
+
+def decode_tags_from_structured(structured: dict[str, Any]) -> list[str]:
+    """
+    Decode Tags from a structured property dict produced by parse_property_element.
+    Handles BinaryString, string/ProtectedString, and SharedString forms.
+    """
+    if not isinstance(structured, dict):
+        return []
+    typ = structured.get("type")
+    if typ == "BinaryString":
+        return _decode_tags_binary(str(structured.get("value") or ""))
+    if typ in ("string", "ProtectedString"):
+        return _decode_tags_text(str(structured.get("value") or ""))
+    if typ == "SharedString":
+        val = structured.get("value")
+        if isinstance(val, str) and val.strip():
+            try:
+                return _decode_tags_binary(val)
+            except Exception:
+                return _decode_tags_text(val)
+        children = structured.get("children")
+        if isinstance(children, dict):
+            for v in children.values():
+                if isinstance(v, str) and v.strip():
+                    try:
+                        return _decode_tags_binary(v)
+                    except Exception:
+                        return _decode_tags_text(v)
+                if isinstance(v, dict) and v.get("_value"):
+                    s = str(v["_value"])
+                    try:
+                        return _decode_tags_binary(s)
+                    except Exception:
+                        return _decode_tags_text(s)
+        return []
+    val = structured.get("value")
+    if isinstance(val, str) and val.strip():
+        return _decode_tags_text(val)
+    return []
