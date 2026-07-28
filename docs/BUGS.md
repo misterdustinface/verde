@@ -22,40 +22,40 @@ When Open issues is empty, contains only “None currently.”, or is sparse (ro
 
 ## Open issues
 
-### 1. Tags stored as SharedString are not decoded on extract
+### 1. Fragile `interesting.py` property-name extraction
 
-`extract.py` only decodes the Tags property when its type is BinaryString, string, or ProtectedString. When Tags appears as a SharedString (rare but legal in some place formats), the value stays in the full Properties map and `meta["Tags"]` remains empty. Rebuild therefore does not re-emit a proper Tags BinaryString (it may re-emit the original SharedString form if left in full Properties, but the first-class Tags list used by search/tags CLIs and Live Sync is empty).
-
-**Impact**  
-Tags are invisible to meta-driven tools and lost from the first-class surface for places that use the SharedString form.
-
-### 2. Selective `--tag` / `_item_has_tag` also ignore SharedString Tags
-
-`_item_has_tag` (used by `--tag` selective export and keep-map) only inspects BinaryString or plain text Tags. SharedString-tagged instances are treated as untagged and can be pruned from scripts-only / tag-filtered exports even when they should be kept.
+The interesting-properties list is extracted from the Luau source with a simple regex that matches double-quoted strings. Any future double-quoted string that is not a property name (comments, string literals inside the module, etc.) will pollute the list, and legitimate property names written with single quotes or concatenation will be missed. The current `luau/interesting_properties.luau` is a clean flat table, so behaviour is correct today, but the extractor remains brittle.
 
 **Impact**  
-Silent incomplete selective extracts for the (rare) SharedString Tags places; compounds issue 1.
+Incorrect or incomplete “interesting” flatten set if the Luau source changes style; search/set surface becomes unreliable.
 
-### 3. Fragile `interesting.py` property-name extraction
-
-The interesting-properties list is extracted from the Luau source with a simple regex that matches double-quoted strings. Any future double-quoted string that is not a property name (comments, string literals inside the module, etc.) will pollute the list, and legitimate property names written with single quotes or concatenation will be missed.
-
-**Impact**  
-Incorrect or incomplete “interesting” flatten set; search/set surface becomes unreliable if the Luau source changes style.
-
-### 4. Child order not preserved on Python full rebuild / import
+### 2. Child order not preserved on Python full rebuild / import
 
 `build.py` `process_directory` walks the filesystem with `sorted(iterdir())`. Roblox instance child order is therefore not restored on full rebuild. Differential import also leaves existing place children in their original order and does not re-order them to match the folder. Usually harmless for scripts, but prevents byte-identical round-trips and can affect order-sensitive behaviour (UI lists, some collection patterns).
 
 **Impact**  
 Non-identical rebuilds; rare behavioural differences for order-dependent instances.
 
-### 5. Tags decode logic still duplicated in extract.py (residual consolidation)
+### 3. Bridge `write_manifest` / `mark_applied` swallow exceptions
 
-`xml_props.decode_tags_from_prop` exists and is used by build, but `extract_properties` and `_item_has_tag` still contain their own near-identical BinaryString / string decode blocks. The incomplete extraction means SharedString handling (and any future Tags variants) can diverge between the two paths and between extract vs build.
+In `features/bridge.py`, both `mark_applied` and `write_file` catch broad `Exception` around the `write_manifest` call and continue. Under rare permission, disk-full, or concurrent-access conditions the on-disk `.verde/manifest.json` can lag the in-memory `known` map. The primary file write already records known, so practical impact is low while the folder remains writable, but the silent path can produce transient “dirty again” flicker after a successful Studio→folder push.
 
 **Impact**  
-Maintainability risk that already manifested as the SharedString gaps above; future Tags edge cases more likely to be fixed in only one place.
+Silent lag of the on-disk manifest; low practical impact, but a real silent-failure path.
+
+### 4. `build.py` still re-implements sibling name uniqueness (residual of shared helper)
+
+`claim_unique_name` + `FS_CASE_INSENSITIVE` live in `xml_props.py` and are used by extract. `build.py` `_build_instance_maps` still contains its own identical while-loop + local `_FS_CASE_INSENSITIVE`. The algorithms match today (so no path-map mismatch), but the duplication is the incomplete half of the shared-helper extraction and is the same class of residual that previously allowed case-path drift.
+
+**Impact**  
+Maintainability risk; future uniqueness policy changes must be applied in two places or the case-path-map class of bugs can reappear.
+
+### 5. Selective `--tag` / keep-map still only surface first-class Tags (post-SharedString fix residual)
+
+After the SharedString decode work, `_item_has_tag` and extract correctly populate `meta["Tags"]` for all supported forms. Selective export itself is correct. Residual observation: if a place ever stores Tags exclusively in a form the shared decoder does not yet recognise, the keep-map would still treat the instance as untagged. No additional forms are known today; this item exists so the decoder remains the single source of truth for any future Tags variants.
+
+**Impact**  
+Future-proofing note only; no current incorrect behaviour.
 
 ---
 
@@ -85,7 +85,7 @@ These behaviours are deliberate and should not be “fixed” without an explici
 - **Attributes search/filter and Luau wrappers** remain open (see TODO_FEATURES); not defects in the existing binary round-trip.
 - Live Sync “N file(s) had no matching script” noise after renames is expected until Referent healing (TODO_FEATURES I1) lands; not treated as a correctness bug today.
 - Selective-extract foundation is shipped; import-side grafting of a partial tree is still residual feature work, not a defect.
-- Bridge `write_manifest` / `mark_applied` swallow OSError/Exception on the manifest write itself; under rare permission or disk-full conditions the on-disk manifest can lag the in-memory known map (the primary write_file path already records known). Low practical impact while the folder remains writable.
+- Full-rebuild child order (Open #2) is the only remaining order-related item; differential import intentionally does not reorder existing place children.
 
 ---
 
@@ -112,6 +112,7 @@ These correctness problems were fixed during development and are no longer prese
 17. MeshPart MeshId / TextureID (and similar Content properties) that use a child `<url>` element are no longer dropped on extract/import. `parse_property_element` previously treated Content as pure text and discarded children, so MeshId became empty on re-emit and MeshParts failed to load in Studio. Content / SharedString / Ref now keep the children structure when present.
 18. Differential import path_key for ModuleScript / LocalScript companion metas (`Name.module.robloxmeta.json` / `Name.local.robloxmeta.json`) no longer includes the type suffix. Previously path_key ended in `…/Name.module` while the place path_map used the instance Name (`…/Name`), so the path fallback never matched and Sources were skipped whenever Referent was missing or stale. Fixed by stripping a trailing `.module` / `.local` when building the hierarchy key (PR #24).
 19. Plugin actions (Set/Replace, Rename tag, Restore scripts, Live Sync apply) now surface a status note when `ChangeHistoryService:TryBeginRecording` returns nil (playtest mode, concurrent recording, etc.). The change still applies; the user is informed that no undo waypoint was created.
+20. Tags stored as SharedString are now decoded on extract (and visible to selective `--tag`). `decode_tags_from_prop` / `decode_tags_from_structured` handle BinaryString, string/ProtectedString, and SharedString forms; extract_properties and `_item_has_tag` both use the shared helpers. Residual Tags-decoding duplication inside extract was removed. (PR #29)
 
 ---
 
