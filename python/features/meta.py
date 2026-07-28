@@ -17,6 +17,12 @@ Shared meta files (*.robloxmeta.json) therefore never contain a top-level
 "Referent" key. When a Referent is known it is written to a sibling
 *.robloxmeta.local.json (gitignored). load_meta_merged() overlays the local
 file so import / Live Sync / search still see the value when present.
+
+AI agent notes
+--------------
+The top-level directory `.ai` is reserved for notes written by AI agents
+working on an extracted tree. It is never imported into Roblox Studio and is
+never wiped by export. See AI_NOTES_DIRNAME / is_under_ai_notes.
 """
 
 from __future__ import annotations
@@ -31,6 +37,20 @@ LOCAL_META_KEYS = frozenset({"Referent"})
 
 LOCAL_META_SUFFIX = ".robloxmeta.local.json"
 SHARED_META_SUFFIX = ".robloxmeta.json"
+
+# Top-level directory reserved for AI agent notes (never imported into Studio,
+# never wiped by export). Starts with '.' so process_directory already skips it;
+# helpers make the exclusion explicit for walkers and cleanups.
+AI_NOTES_DIRNAME = ".ai"
+
+
+def is_under_ai_notes(path: Path, root: Path) -> bool:
+    """True if *path* is the AI notes dir or any descendant (relative to *root*)."""
+    try:
+        rel = path.resolve().relative_to(root.resolve())
+    except ValueError:
+        return False
+    return bool(rel.parts) and rel.parts[0] == AI_NOTES_DIRNAME
 
 
 def load_meta(path: Path) -> dict[str, Any] | None:
@@ -138,11 +158,16 @@ def walk_metas(root: Path) -> Iterator[tuple[Path, dict[str, Any]]]:
 
     Merged meta includes any machine-local Referent so matching continues to
     work on the machine that owns the .local.json files.
+
+    Paths under the top-level AI agent notes directory (`.ai`) are skipped so
+    notes never become import candidates.
     """
     for p in root.rglob("*.robloxmeta.json"):
         # Defensive: local siblings end in .robloxmeta.local.json and should not
         # match the glob, but skip them explicitly if a naming collision appears.
         if p.name.endswith(LOCAL_META_SUFFIX):
+            continue
+        if is_under_ai_notes(p, root):
             continue
         meta = load_meta_merged(p)
         if meta:
