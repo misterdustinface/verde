@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import extract
+import export
 from features.meta import get_prop_value, set_prop_value, matches, walk_metas
 
 
@@ -42,7 +42,7 @@ def _write_tree(tmp_path: Path) -> Path:
     src = tmp_path / "in.rbxlx"
     src.write_text(xml, encoding="utf-8")
     out = tmp_path / "extracted"
-    extract.extract(str(src), str(out))
+    export.export(str(src), str(out))
     return out
 
 

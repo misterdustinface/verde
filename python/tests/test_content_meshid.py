@@ -1,4 +1,4 @@
-"""MeshPart MeshId / TextureID Content-with-url child must survive extract/build."""
+"""MeshPart MeshId / TextureID Content-with-url child must survive export/build."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import json
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-import extract
+import export
 import build
 from xml_props import parse_property_element
 
@@ -49,7 +49,7 @@ def test_meshpart_meshid_url_roundtrip(tmp_path: Path):
     src = tmp_path / "in.rbxlx"
     src.write_text(rbxlx, encoding="utf-8")
     out = tmp_path / "extracted"
-    extract.extract(str(src), str(out), scripts_only=False)
+    export.export(str(src), str(out), scripts_only=False)
 
     meta = json.loads((out / "MyMesh" / ".robloxmeta.json").read_text())
     assert meta["ClassName"] == "MeshPart"

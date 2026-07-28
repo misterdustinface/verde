@@ -1,4 +1,4 @@
-"""Unit tests for Instance.AttributesSerialize decode / encode and extract/build round-trip."""
+"""Unit tests for Instance.AttributesSerialize decode / encode and export/build round-trip."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import struct
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-import extract
+import export
 import build
 from attributes import decode_attributes, encode_attributes, encode_attributes_b64
 
@@ -107,7 +107,7 @@ def test_encode_roundtrip_vector3_color3():
 
 
 def test_extract_build_attributes_roundtrip(tmp_path: Path):
-    """Full extract → meta["Attributes"] → build → AttributesSerialize present."""
+    """Full export → meta["Attributes"] → build → AttributesSerialize present."""
     # Build a small AttributesSerialize payload (string + bool)
     string_val = struct.pack("<I", 5) + b"hello"
     bool_val = b"\x01"
@@ -133,7 +133,7 @@ def test_extract_build_attributes_roundtrip(tmp_path: Path):
     src = tmp_path / "in.rbxlx"
     src.write_text(xml, encoding="utf-8")
     out = tmp_path / "extracted"
-    extract.extract(str(src), str(out), scripts_only=False)
+    export.export(str(src), str(out), scripts_only=False)
 
     meta = json.loads((out / "AttrPart" / ".robloxmeta.json").read_text())
     assert "Attributes" in meta
@@ -169,7 +169,7 @@ def test_empty_attributes_omitted(tmp_path: Path):
     src = tmp_path / "in.rbxlx"
     src.write_text(xml, encoding="utf-8")
     out = tmp_path / "extracted"
-    extract.extract(str(src), str(out), scripts_only=False)
+    export.export(str(src), str(out), scripts_only=False)
 
     meta = json.loads((out / "Plain" / ".robloxmeta.json").read_text())
     assert "Attributes" not in meta
