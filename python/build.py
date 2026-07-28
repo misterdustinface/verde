@@ -30,9 +30,13 @@ After create/update, high-confidence renames and unmatched leftovers are handled
   the same ClassName under the same parent (for scripts, identical Source is
   preferred when present) → the old Item is removed by default.
   Pass --no-rename to report only.
-- Pure leftovers (unmatched place instances with no rename match) are also
-  removed by default.
+- Pure leftovers (unmatched place instances with no rename match) are removed
+  by default, but only under parents that appear in the folder extract.
+  Place content outside the exported tree is never pruned.
   Pass --no-delete to report only.
+
+Clean (manifest / mtime-win) candidates still resolve to their place Item and
+mark it applied, so unchanged scripts are never treated as leftovers.
 
 Scripts-only safety: when every candidate in the run is a Script / LocalScript /
 ModuleScript, pure prune is limited to those ClassNames so a normal scripts-only
@@ -40,8 +44,9 @@ import does not wipe non-script content. High-confidence renames still apply to
 any ClassName.
 
 When a .verde/manifest.json is present, files whose simple numeric hash + mtime
-match the recorded entry are skipped early (and mtime-wins is applied against
-the .rbxlx). After a successful import the manifest is refreshed.
+match the recorded entry are skipped for writing (and mtime-wins is applied
+against the .rbxlx) but still mark their place match as applied. After a
+successful import the manifest is refreshed.
 
 --force bypasses the clean / mtime-win skips so every matching folder entry is
 considered for application (still only written when content actually differs
@@ -96,6 +101,7 @@ from xml_props import (
 
 _UNIQUIFY_RE = re.compile(r"^(.+)_([0-9]+)$")
 _SCRIPT_CLASSES = frozenset({"Script", "LocalScript", "ModuleScript"})
+_LEFTOVER_PRINT_LIMIT = 20
 
 
 def read_text(path: Path) -> str:
@@ -681,6 +687,19 @@ def _remove_item_from_tree(
         return False
 
 
+def _candidate_parent_set(path_keys: set[str]) -> set[str]:
+    """All ancestor parent paths of the given candidate path keys (incl. '')."""
+    parents: set[str] = set()
+    for pk in path_keys:
+        if not pk:
+            parents.add("")
+            continue
+        parts = pk.split("/")
+        for i in range(len(parts)):
+            parents.add("/".join(parts[:i]))
+    return parents
+
+
 def import_rbxlx(
     extracted_dir: str,
     output_rbxlx: str,
@@ -727,9 +746,16 @@ def import_rbxlx(
 
     referent_map, path_map, parent_map = _build_instance_maps(root)
 
-    # --- Collect candidates (after dirty filter) ---
+    # --- Collect candidates (always; clean ones still mark place matches) ---
     candidates: list[dict[str, Any]] = []
-    skipped_clean = 0
+
+    def _is_clean(related_rels: list[str]) -> bool:
+        if force or manifest is None or is_file_dirty is None:
+            return False
+        for r in related_rels:
+            if is_file_dirty(input_path, r, manifest, rbxlx_mtime=rbxlx_mtime):
+                return False
+        return True
 
     for meta_path, meta in walk_metas(input_path):
         rel = meta_path.relative_to(input_path)
@@ -770,16 +796,6 @@ def import_rbxlx(
                 inst_name = base_for_script
             path_key = str((rel.parent / inst_name)).replace("\\", "/")
 
-        if not force and manifest is not None and is_file_dirty is not None:
-            any_dirty = False
-            for r in related_rels:
-                if is_file_dirty(input_path, r, manifest, rbxlx_mtime=rbxlx_mtime):
-                    any_dirty = True
-                    break
-            if not any_dirty:
-                skipped_clean += 1
-                continue
-
         candidates.append(
             {
                 "meta_path": meta_path,
@@ -789,6 +805,7 @@ def import_rbxlx(
                 "path_key": path_key or "",
                 "ref": meta.get("Referent") if isinstance(meta.get("Referent"), str) else None,
                 "uid": _meta_unique_id(meta),
+                "clean": _is_clean(related_rels),
             }
         )
 
@@ -821,16 +838,6 @@ def import_rbxlx(
             path_key = ""
         source = read_text(p)
         meta = {"ClassName": class_name, "Name": inst_name}
-        related_rels = [rel_str]
-        if not force and manifest is not None and is_file_dirty is not None:
-            any_dirty = False
-            for r in related_rels:
-                if is_file_dirty(input_path, r, manifest, rbxlx_mtime=rbxlx_mtime):
-                    any_dirty = True
-                    break
-            if not any_dirty:
-                skipped_clean += 1
-                continue
         candidates.append(
             {
                 "meta_path": p,
@@ -840,6 +847,7 @@ def import_rbxlx(
                 "path_key": path_key,
                 "ref": None,
                 "uid": None,
+                "clean": _is_clean([rel_str]),
             }
         )
 
@@ -897,6 +905,9 @@ def import_rbxlx(
 
     kept.sort(key=lambda c: c["path_key"].count("/"))
 
+    # Parents that appear in the folder extract — pure prune is scoped to these.
+    extract_parents = _candidate_parent_set({c["path_key"] for c in kept})
+
     scripts_only_run = True
     for c in kept:
         cls = str((c["meta"] or {}).get("ClassName") or "")
@@ -911,6 +922,7 @@ def import_rbxlx(
     updated = 0
     created = 0
     unchanged = 0
+    skipped_clean = 0
     skipped_no_match = 0
     applied_items: set[int] = set()
     matched_path_keys: set[str] = set()
@@ -921,6 +933,7 @@ def import_rbxlx(
         source = c["source"]
         path_key = c["path_key"]
         ref = c["ref"]
+        clean = bool(c.get("clean"))
 
         item: ET.Element | None = None
         if ref and ref in referent_map:
@@ -928,7 +941,19 @@ def import_rbxlx(
         elif path_key and path_key in path_map:
             item = path_map[path_key]
 
+        # Clean candidates: mark place match applied, never write.
+        if clean and item is not None:
+            applied_items.add(id(item))
+            matched_path_keys.add(path_key)
+            skipped_clean += 1
+            continue
+
         if item is None:
+            # Clean with no place match → nothing to mark; skip create for clean.
+            if clean:
+                skipped_clean += 1
+                continue
+
             parent_item: ET.Element | None = None
             leaf_name = ""
             parent_path = ""
@@ -997,6 +1022,7 @@ def import_rbxlx(
     renames_reported = 0
     leftovers_reported = 0
     pruned = 0
+    leftover_lines: list[str] = []
 
     unmatched: list[tuple[str, ET.Element]] = []
     for path, item in list(path_map.items()):
@@ -1028,13 +1054,25 @@ def import_rbxlx(
                 if _remove_item_from_tree(item, parent_map, root, path_map, path):
                     renames_applied += 1
         else:
+            # Pure leftover safety gates:
+            # 1. scripts-only runs only prune script ClassNames
+            # 2. only prune under parents that exist in the folder extract
             if scripts_only_run and cls not in _SCRIPT_CLASSES:
                 continue
+            if parent_path not in extract_parents:
+                continue
             leftovers_reported += 1
-            print(f"  · leftover / possible deletion: {path} ({cls or 'instance'})")
+            line = f"  · leftover / possible deletion: {path} ({cls or 'instance'})"
+            if leftovers_reported <= _LEFTOVER_PRINT_LIMIT:
+                leftover_lines.append(line)
             if not no_delete:
                 if _remove_item_from_tree(item, parent_map, root, path_map, path):
                     pruned += 1
+
+    for line in leftover_lines:
+        print(line)
+    if leftovers_reported > _LEFTOVER_PRINT_LIMIT:
+        print(f"  · … and {leftovers_reported - _LEFTOVER_PRINT_LIMIT} more leftover(s)")
 
     if updated or created or renames_applied or pruned:
         ET.indent(tree, space="  ")
@@ -1057,7 +1095,7 @@ def import_rbxlx(
     if unchanged:
         print(f"  ({unchanged} matched instance(s) already up to date)")
     if skipped_clean:
-        print(f"  ({skipped_clean} entry(ies) skipped — clean per manifest / mtime-win)")
+        print(f"  ({skipped_clean} entry(ies) clean per manifest / mtime-win — marked matched, not written)")
     if skipped_redundant:
         print(f"  ({skipped_redundant} redundant disk entry(ies) skipped — Name_N / shared Referent or UniqueId)")
     if skipped_no_match:
@@ -1066,6 +1104,8 @@ def import_rbxlx(
         print(f"  ({renames_reported} high-confidence rename(s) reported — omit --no-rename to remove the old name)")
     if leftovers_reported and no_delete:
         print(f"  ({leftovers_reported} leftover(s) reported — omit --no-delete to prune them)")
+    elif leftovers_reported and pruned:
+        print(f"  ({leftovers_reported} leftover(s) under extract tree — pruned by default; pass --no-delete to keep)")
     print("Open the place in Studio (or re-open) to see the changes.")
 
     try:
@@ -1086,9 +1126,10 @@ def main() -> None:
             "Use --preserve-content only when recovering from older corrupted exports. "
             "New folder entries whose parent path already exists in the place are "
             "auto-created (UniqueId left for Studio to assign). "
-            "High-confidence renames (same ClassName under same parent; identical "
-            "Source preferred for scripts) and unmatched leftovers are removed by "
-            "default. Pass --no-rename and/or --no-delete to report only. "
+            "High-confidence renames and unmatched leftovers under the extract tree "
+            "are removed by default. Pass --no-rename / --no-delete to report only. "
+            "Clean (unchanged) disk entries still mark their place match so they are "
+            "never false leftovers. "
             "Scripts-only runs still protect non-script place content on pure prune. "
             "Bare script files without a companion .robloxmeta.json are also "
             "discovered and auto-created when the parent exists. "
@@ -1108,8 +1149,8 @@ def main() -> None:
         help=(
             "Force consideration of all matching folder files, bypassing the "
             "manifest clean-check and mtime-win logic that would otherwise skip "
-            "files older than the target .rbxlx. Content is still only written "
-            "when it actually differs. Redundant disk entries are still skipped."
+            "writes. Content is still only written when it actually differs. "
+            "Redundant disk entries are still skipped."
         ),
     )
     parser.add_argument(
@@ -1134,8 +1175,8 @@ def main() -> None:
         "--no-delete",
         action="store_true",
         help=(
-            "Report unmatched leftovers but do not prune them. "
-            "By default (without this flag) leftovers are removed."
+            "Report unmatched leftovers under the extract tree but do not prune "
+            "them. By default (without this flag) leftovers are removed."
         ),
     )
     args = parser.parse_args()
