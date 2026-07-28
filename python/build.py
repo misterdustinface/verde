@@ -38,6 +38,11 @@ After create/update, high-confidence renames and unmatched leftovers are handled
 Clean (manifest / mtime-win) candidates still resolve to their place Item and
 mark it applied, so unchanged scripts are never treated as leftovers.
 
+IMPORTANT: clean must only suppress *writes to an existing place match*.
+When the place has no match, auto-create still runs even if the disk file is
+clean per the manifest (meta-less AI scripts can be recorded without ever
+having been applied).
+
 Scripts-only safety: when every candidate in the run is a Script / LocalScript /
 ModuleScript, pure prune is limited to those ClassNames so a normal scripts-only
 import does not wipe non-script content. High-confidence renames still apply to
@@ -821,7 +826,9 @@ def import_rbxlx(
             class_name = "ModuleScript"
             inst_name = name[: -len(".module.lua")]
         elif name.endswith(".lua"):
-            class_name = "Script"
+            # Meta-less plain .lua (typical AI output) → ModuleScript.
+            # Studio-exported Scripts always carry a companion .robloxmeta.json.
+            class_name = "ModuleScript"
             inst_name = name[: -len(".lua")]
         else:
             continue
@@ -838,6 +845,7 @@ def import_rbxlx(
             path_key = ""
         source = read_text(p)
         meta = {"ClassName": class_name, "Name": inst_name}
+        print(f"  · discovered bare script (no meta): {rel_str} → {class_name}")
         candidates.append(
             {
                 "meta_path": p,
@@ -949,11 +957,9 @@ def import_rbxlx(
             continue
 
         if item is None:
-            # Clean with no place match → nothing to mark; skip create for clean.
-            if clean:
-                skipped_clean += 1
-                continue
-
+            # Always attempt auto-create when the place has no match.
+            # Manifest "clean" must not block create: write_manifest records
+            # every tracked disk file, including meta-less ones never applied.
             parent_item: ET.Element | None = None
             leaf_name = ""
             parent_path = ""
@@ -1129,7 +1135,8 @@ def main() -> None:
             "High-confidence renames and unmatched leftovers under the extract tree "
             "are removed by default. Pass --no-rename / --no-delete to report only. "
             "Clean (unchanged) disk entries still mark their place match so they are "
-            "never false leftovers. "
+            "never false leftovers. Meta-less disk files missing from the place are "
+            "still auto-created even when clean per the manifest. "
             "Scripts-only runs still protect non-script place content on pure prune. "
             "Bare script files without a companion .robloxmeta.json are also "
             "discovered and auto-created when the parent exists. "
