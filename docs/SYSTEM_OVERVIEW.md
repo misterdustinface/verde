@@ -39,7 +39,7 @@ Always run **`verde-sync`** when artists/designers need live updates in Studio.
 
 | Command | Module | Purpose |
 |---------|--------|---------|
-| `verde-export` | `extract:main` | `.rbxlx` → folder tree |
+| `verde-export` | `export:main` | `.rbxlx` → folder tree |
 | `verde-import` | `build:main` | folder → existing or new `.rbxlx` |
 | `verde-merge` | `features.sync:main` | Offline folder ↔ `.rbxlx` (mtime-win today; **future: git-merge-style conflicts**) |
 | `verde-sync` | `features.bridge:main` | Live folder ↔ **open** Studio |
@@ -157,7 +157,7 @@ verde/
 │   ├── VerdePlugin.server.luau
 │   └── README.md
 ├── python/
-│   ├── extract.py              # verde-export
+│   ├── export.py               # verde-export
 │   ├── build.py                # verde-import
 │   ├── features/
 │   │   ├── sync.py             # verde-merge (manifest + mtime-win)
