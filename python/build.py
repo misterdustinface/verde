@@ -13,11 +13,10 @@ verde-import is the command:
   preferentially, then by hierarchy path), and apply Source / Properties / Tags /
   Attributes from the folder into the place file.
 
-When a folder entry has no match in the place but its parent hierarchy path
-already exists, a new Item is created under that parent (ClassName / Name /
-Referent / Source / Tags / Attributes from meta). UniqueId is omitted so
-Studio assigns a fresh one. If the parent path is also missing the entry is
-still skipped.
+When a folder entry has no match in the place, intermediate parents are grafted
+as needed (Folder, or ClassName from a candidate meta for that path when present)
+so the new Item can be created under the nearest existing ancestor. UniqueId is
+omitted on create so Studio assigns a fresh one.
 
 Bare script files (.lua / .local.lua / .module.lua) that lack a companion
 .robloxmeta.json are also discovered and treated as new candidates (defaults
@@ -700,6 +699,54 @@ def _candidate_parent_set(path_keys: set[str]) -> set[str]:
     return parents
 
 
+def _ensure_parent_chain(
+    parent_path: str,
+    *,
+    path_map: dict[str, ET.Element],
+    parent_map: dict[ET.Element, ET.Element | None],
+    referent_map: dict[str, ET.Element],
+    root: ET.Element,
+    meta_by_path: dict[str, dict[str, Any]],
+    grafted: list[str],
+) -> ET.Element | None:
+    """Ensure every segment of parent_path exists; graft missing intermediates.
+
+    Returns the parent Item (or root for ''), or None on failure.
+    """
+    if parent_path == "":
+        return root
+    if parent_path in path_map:
+        return path_map[parent_path]
+
+    parts = parent_path.split("/")
+    current_path = ""
+    current_item: ET.Element = root
+    for i, part in enumerate(parts):
+        current_path = part if i == 0 else f"{current_path}/{part}"
+        if current_path in path_map:
+            current_item = path_map[current_path]
+            continue
+        meta = dict(meta_by_path.get(current_path) or {})
+        if not meta.get("ClassName"):
+            meta["ClassName"] = "Folder"
+        if not meta.get("Name"):
+            meta["Name"] = part
+        # Intermediates are structural containers — never attach Source here.
+        new_item = _create_item_from_meta(
+            current_item, meta, source=None, leaf_name=part
+        )
+        path_map[current_path] = new_item
+        parent_map[new_item] = current_item
+        new_ref = new_item.get("referent")
+        if new_ref:
+            referent_map[new_ref] = new_item
+        grafted.append(current_path)
+        cls = str(meta.get("ClassName") or "Folder")
+        print(f"  · grafted parent {current_path} ({cls})")
+        current_item = new_item
+    return current_item
+
+
 def import_rbxlx(
     extracted_dir: str,
     output_rbxlx: str,
@@ -905,8 +952,10 @@ def import_rbxlx(
 
     kept.sort(key=lambda c: c["path_key"].count("/"))
 
-    # Parents that appear in the folder extract — pure prune is scoped to these.
     extract_parents = _candidate_parent_set({c["path_key"] for c in kept})
+    meta_by_path: dict[str, dict[str, Any]] = {
+        c["path_key"]: c["meta"] for c in kept if c["path_key"]
+    }
 
     scripts_only_run = True
     for c in kept:
@@ -927,6 +976,7 @@ def import_rbxlx(
     applied_items: set[int] = set()
     matched_path_keys: set[str] = set()
     created_under: dict[str, list[tuple[str, str, str | None]]] = {}
+    grafted_paths: list[str] = []
 
     for c in kept:
         meta = c["meta"]
@@ -954,17 +1004,22 @@ def import_rbxlx(
                 skipped_clean += 1
                 continue
 
-            parent_item: ET.Element | None = None
             leaf_name = ""
             parent_path = ""
             if path_key:
                 parts = path_key.split("/")
                 leaf_name = parts[-1]
                 parent_path = "/".join(parts[:-1]) if len(parts) > 1 else ""
-                if parent_path == "":
-                    parent_item = root
-                elif parent_path in path_map:
-                    parent_item = path_map[parent_path]
+
+            parent_item = _ensure_parent_chain(
+                parent_path,
+                path_map=path_map,
+                parent_map=parent_map,
+                referent_map=referent_map,
+                root=root,
+                meta_by_path=meta_by_path,
+                grafted=grafted_paths,
+            )
 
             if parent_item is not None:
                 new_item = _create_item_from_meta(
@@ -988,7 +1043,7 @@ def import_rbxlx(
 
             print(
                 f"  · no match for {c['rel']} "
-                f"(parent path missing; cannot auto-create)"
+                f"(could not graft parent path)"
             )
             skipped_no_match += 1
             continue
@@ -1054,9 +1109,6 @@ def import_rbxlx(
                 if _remove_item_from_tree(item, parent_map, root, path_map, path):
                     renames_applied += 1
         else:
-            # Pure leftover safety gates:
-            # 1. scripts-only runs only prune script ClassNames
-            # 2. only prune under parents that exist in the folder extract
             if scripts_only_run and cls not in _SCRIPT_CLASSES:
                 continue
             if parent_path not in extract_parents:
@@ -1074,7 +1126,7 @@ def import_rbxlx(
     if leftovers_reported > _LEFTOVER_PRINT_LIMIT:
         print(f"  · … and {leftovers_reported - _LEFTOVER_PRINT_LIMIT} more leftover(s)")
 
-    if updated or created or renames_applied or pruned:
+    if updated or created or renames_applied or pruned or grafted_paths:
         ET.indent(tree, space="  ")
         tree.write(str(out_path), encoding="utf-8", xml_declaration=True)
 
@@ -1083,6 +1135,8 @@ def import_rbxlx(
         parts.append(f"{updated} update(s)")
     if created:
         parts.append(f"{created} created")
+    if grafted_paths:
+        parts.append(f"{len(grafted_paths)} parent(s) grafted")
     if renames_applied:
         parts.append(f"{renames_applied} rename(s) applied")
     if pruned:
@@ -1099,7 +1153,7 @@ def import_rbxlx(
     if skipped_redundant:
         print(f"  ({skipped_redundant} redundant disk entry(ies) skipped — Name_N / shared Referent or UniqueId)")
     if skipped_no_match:
-        print(f"  ({skipped_no_match} folder entries had no matching instance and no creatable parent)")
+        print(f"  ({skipped_no_match} folder entries could not be created)")
     if renames_reported and no_rename:
         print(f"  ({renames_reported} high-confidence rename(s) reported — omit --no-rename to remove the old name)")
     if leftovers_reported and no_delete:
@@ -1124,15 +1178,15 @@ def main() -> None:
             "CLI: verde-import. "
             "Blank MeshId/Content in the export applies by default (VCS-correct). "
             "Use --preserve-content only when recovering from older corrupted exports. "
-            "New folder entries whose parent path already exists in the place are "
-            "auto-created (UniqueId left for Studio to assign). "
+            "New folder entries are auto-created; missing intermediate parents are "
+            "grafted as Folders (or from meta when present). "
             "High-confidence renames and unmatched leftovers under the extract tree "
             "are removed by default. Pass --no-rename / --no-delete to report only. "
             "Clean (unchanged) disk entries still mark their place match so they are "
             "never false leftovers. "
             "Scripts-only runs still protect non-script place content on pure prune. "
             "Bare script files without a companion .robloxmeta.json are also "
-            "discovered and auto-created when the parent exists. "
+            "discovered and auto-created. "
             "Referent is read from machine-local *.robloxmeta.local.json when present."
         )
     )
