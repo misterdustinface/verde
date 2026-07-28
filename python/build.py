@@ -29,9 +29,10 @@ After create/update, high-confidence renames and unmatched leftovers are handled
 - High-confidence rename (any ClassName): exactly one newly-created sibling of
   the same ClassName under the same parent (for scripts, identical Source is
   preferred when present) → the old Item is removed by default.
+  Pass --no-rename to report only.
 - Pure leftovers (unmatched place instances with no rename match) are also
   removed by default.
-- Pass --nodelete to report only and never remove anything.
+  Pass --no-delete to report only.
 
 Scripts-only safety: when every candidate in the run is a Script / LocalScript /
 ModuleScript, pure prune is limited to those ClassNames so a normal scripts-only
@@ -685,7 +686,8 @@ def import_rbxlx(
     output_rbxlx: str,
     force: bool = False,
     preserve_content: bool = False,
-    nodelete: bool = False,
+    no_rename: bool = False,
+    no_delete: bool = False,
 ) -> None:
     input_path = Path(extracted_dir)
     if not input_path.is_dir():
@@ -702,8 +704,10 @@ def import_rbxlx(
         print("  (--force: mtime-win / clean-manifest skips disabled)")
     if preserve_content:
         print("  (--preserve-content: blank meta Content will not overwrite place values)")
-    if nodelete:
-        print("  (--nodelete: report renames/leftovers only; never remove place instances)")
+    if no_rename:
+        print("  (--no-rename: high-confidence renames will only be reported)")
+    if no_delete:
+        print("  (--no-delete: unmatched leftovers will only be reported)")
 
     manifest = None
     rbxlx_mtime = None
@@ -789,9 +793,6 @@ def import_rbxlx(
         )
 
     # Discover bare script files that have no companion .robloxmeta.json.
-    # Full rebuild invents defaults for these; differential previously ignored
-    # them, so a hand-added .lua never appeared in the place. Now treat them
-    # as new candidates (auto-create under existing parent when possible).
     for p in input_path.rglob("*"):
         if not p.is_file() or p.name.startswith("."):
             continue
@@ -807,7 +808,6 @@ def import_rbxlx(
             inst_name = name[: -len(".lua")]
         else:
             continue
-        # Companion meta already collected by walk_metas?
         companion = p.parent / f"{p.stem}.robloxmeta.json"
         if companion.is_file():
             continue
@@ -843,8 +843,7 @@ def import_rbxlx(
             }
         )
 
-    # --- Drop redundant disk entries (do not import them) ---
-    # Prefer entries that map into the place, then non-uniquified names.
+    # --- Drop redundant disk entries ---
     by_ref: dict[str, dict[str, Any]] = {}
     by_uid: dict[str, dict[str, Any]] = {}
     path_keys_present = {c["path_key"] for c in candidates if c["path_key"]}
@@ -898,7 +897,6 @@ def import_rbxlx(
 
     kept.sort(key=lambda c: c["path_key"].count("/"))
 
-    # Heuristic: scripts-only run if every kept candidate is a script ClassName
     scripts_only_run = True
     for c in kept:
         cls = str((c["meta"] or {}).get("ClassName") or "")
@@ -906,7 +904,6 @@ def import_rbxlx(
             scripts_only_run = False
             break
         if not cls and c.get("source") is None:
-            # folder / non-script meta with no Source
             scripts_only_run = False
             break
 
@@ -917,7 +914,6 @@ def import_rbxlx(
     skipped_no_match = 0
     applied_items: set[int] = set()
     matched_path_keys: set[str] = set()
-    # For rename detection: parent_path → list of (path_key, class_name, source_or_None)
     created_under: dict[str, list[tuple[str, str, str | None]]] = {}
 
     for c in kept:
@@ -1014,34 +1010,29 @@ def import_rbxlx(
         cls = (item.get("class") or "").strip()
         old_source = _get_source(item)
 
-        # High-confidence rename candidates under same parent + same ClassName
         rename_candidates: list[str] = []
         for created_path, created_cls, created_source in created_under.get(parent_path, []):
             if created_cls != cls:
                 continue
-            # Prefer identical Source when both sides are scripts
             if old_source and created_source is not None:
                 if created_source == old_source:
                     rename_candidates.append(created_path)
             else:
-                # Non-script (or missing Source): same ClassName under same parent is enough
                 rename_candidates.append(created_path)
 
-        # Exactly one candidate → high-confidence rename
         if len(rename_candidates) == 1:
             new_path = rename_candidates[0]
             renames_reported += 1
             print(f"  · rename detected: {path} → {new_path} ({cls or 'instance'})")
-            if not nodelete:
+            if not no_rename:
                 if _remove_item_from_tree(item, parent_map, root, path_map, path):
                     renames_applied += 1
         else:
-            # Pure leftover. In scripts-only runs only prune script ClassNames.
             if scripts_only_run and cls not in _SCRIPT_CLASSES:
                 continue
             leftovers_reported += 1
             print(f"  · leftover / possible deletion: {path} ({cls or 'instance'})")
-            if not nodelete:
+            if not no_delete:
                 if _remove_item_from_tree(item, parent_map, root, path_map, path):
                     pruned += 1
 
@@ -1071,10 +1062,10 @@ def import_rbxlx(
         print(f"  ({skipped_redundant} redundant disk entry(ies) skipped — Name_N / shared Referent or UniqueId)")
     if skipped_no_match:
         print(f"  ({skipped_no_match} folder entries had no matching instance and no creatable parent)")
-    if renames_reported and nodelete:
-        print(f"  ({renames_reported} high-confidence rename(s) reported — pass without --nodelete to remove the old name)")
-    if leftovers_reported and nodelete:
-        print(f"  ({leftovers_reported} leftover(s) reported — pass without --nodelete to prune them)")
+    if renames_reported and no_rename:
+        print(f"  ({renames_reported} high-confidence rename(s) reported — omit --no-rename to remove the old name)")
+    if leftovers_reported and no_delete:
+        print(f"  ({leftovers_reported} leftover(s) reported — omit --no-delete to prune them)")
     print("Open the place in Studio (or re-open) to see the changes.")
 
     try:
@@ -1097,7 +1088,7 @@ def main() -> None:
             "auto-created (UniqueId left for Studio to assign). "
             "High-confidence renames (same ClassName under same parent; identical "
             "Source preferred for scripts) and unmatched leftovers are removed by "
-            "default. Pass --nodelete to report only and never remove anything. "
+            "default. Pass --no-rename and/or --no-delete to report only. "
             "Scripts-only runs still protect non-script place content on pure prune. "
             "Bare script files without a companion .robloxmeta.json are also "
             "discovered and auto-created when the parent exists. "
@@ -1132,12 +1123,19 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--nodelete",
+        "--no-rename",
         action="store_true",
         help=(
-            "Report high-confidence renames and leftovers but never remove place "
-            "instances. By default (without this flag) renames are applied and "
-            "unmatched leftovers are pruned."
+            "Report high-confidence renames but do not remove the old instance. "
+            "By default (without this flag) the old name is removed."
+        ),
+    )
+    parser.add_argument(
+        "--no-delete",
+        action="store_true",
+        help=(
+            "Report unmatched leftovers but do not prune them. "
+            "By default (without this flag) leftovers are removed."
         ),
     )
     args = parser.parse_args()
@@ -1146,7 +1144,8 @@ def main() -> None:
         args.output_rbxlx,
         force=args.force,
         preserve_content=args.preserve_content,
-        nodelete=args.nodelete,
+        no_rename=args.no_rename,
+        no_delete=args.no_delete,
     )
 
 
