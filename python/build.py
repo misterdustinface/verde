@@ -79,6 +79,9 @@ Attributes so that round-trips are as lossless as possible.
 Referent is read from the machine-local sibling (*.robloxmeta.local.json) when
 present; shared .robloxmeta.json files never contain it.
 
+The top-level `.ai` directory (AI agent notes) is never walked for candidates
+and is never imported into the place.
+
 For offline dirty push/pull against a .rbxlx without opening Studio, use
 verde-merge. For live Studio updates, use verde-sync.
 """
@@ -94,7 +97,7 @@ from pathlib import Path
 from typing import Any
 
 from attributes import decode_attributes, encode_attributes_b64
-from features.meta import load_meta_merged, walk_metas
+from features.meta import AI_NOTES_DIRNAME, is_under_ai_notes, load_meta_merged, walk_metas
 from xml_props import (
     claim_unique_name,
     decode_tags_from_prop,
@@ -263,6 +266,10 @@ def add_properties(
 def process_directory(dir_path: Path, parent_element: ET.Element) -> None:
     for item in sorted(dir_path.iterdir()):
         if item.name.startswith("."):
+            continue
+        # Explicit: never import the AI agent notes tree (also covered by '.'
+        # skip when the dirname is `.ai`, but keep the guard for clarity).
+        if item.name == AI_NOTES_DIRNAME:
             continue
 
         if item.is_file() and (
@@ -826,6 +833,9 @@ def import_rbxlx(
         return True
 
     for meta_path, meta in walk_metas(input_path):
+        # walk_metas already skips .ai; defensive double-check.
+        if is_under_ai_notes(meta_path, input_path):
+            continue
         rel = meta_path.relative_to(input_path)
         rel_str = str(rel).replace("\\", "/")
         source: str | None = None
@@ -878,8 +888,11 @@ def import_rbxlx(
         )
 
     # Discover bare script files that have no companion .robloxmeta.json.
+    # Skip anything under the AI agent notes directory.
     for p in input_path.rglob("*"):
         if not p.is_file() or p.name.startswith("."):
+            continue
+        if is_under_ai_notes(p, input_path):
             continue
         name = p.name
         if name.endswith(".local.lua"):
@@ -1176,7 +1189,7 @@ def import_rbxlx(
     if renames_reported and no_rename:
         print(f"  ({renames_reported} high-confidence rename(s) reported — omit --no-rename to remove the old name)")
     if leftovers_reported and no_delete:
-        print(f"  ({leftovers_reported} leftover(s) reported — omit --no-delete to prune them)")
+        print(f"  ({leftovers_reported} leftover(s) reported — omit --no-delete to keep)")
     elif leftovers_reported and pruned:
         print(f"  ({leftovers_reported} leftover(s) under extract tree — pruned by default; pass --no-delete to keep)")
     print("Open the place in Studio (or re-open) to see the changes.")
@@ -1206,7 +1219,8 @@ def main() -> None:
             "Clean (unchanged) disk entries still mark their place match so they are "
             "never false leftovers. "
             "Scripts-only runs still protect non-script place content on pure prune. "
-            "Referent is read from machine-local *.robloxmeta.local.json when present."
+            "Referent is read from machine-local *.robloxmeta.local.json when present. "
+            "The top-level .ai/ AI agent notes directory is never imported."
         )
     )
     parser.add_argument("extracted_dir", help="Path to extracted Verde folder")
