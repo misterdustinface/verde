@@ -88,8 +88,16 @@ def _resolve_name(item: ET.Element) -> str:
     return "Unnamed"
 
 
-def _decode_tags_prop(prop: ET.Element) -> list[str]:
-    """Decode a Tags property the same way extract does."""
+def _decode_tags_prop(prop: ET.Element, shared_strings: dict[str, str] | None = None) -> list[str]:
+    """Decode a Tags property the same way extract does (including SharedString)."""
+    try:
+        from xml_props import decode_tags_from_prop
+
+        return decode_tags_from_prop(prop, shared_strings)
+    except ImportError:
+        pass
+
+    # Fallback for standalone runs
     text = (prop.text or "").strip()
     if not text:
         return []
@@ -100,6 +108,13 @@ def _decode_tags_prop(prop: ET.Element) -> list[str]:
             return [t.decode("utf-8", errors="replace") for t in data.split(b"\0") if t]
         except Exception:
             pass
+    if prop.tag == "SharedString" and shared_strings and text in shared_strings:
+        payload = shared_strings[text]
+        try:
+            data = base64.b64decode(payload.replace("\n", "").replace(" ", ""))
+            return [t.decode("utf-8", errors="replace") for t in data.split(b"\0") if t]
+        except Exception:
+            return []
     # string / ProtectedString or decode fallback
     return [t.strip() for t in text.replace("\0", ",").split(",") if t.strip()]
 
@@ -107,6 +122,18 @@ def _decode_tags_prop(prop: ET.Element) -> list[str]:
 def collect_structure(rbxlx_path: str) -> dict:
     tree = ET.parse(rbxlx_path)
     root = tree.getroot()
+
+    shared_strings: dict[str, str] = {}
+    try:
+        from xml_props import parse_shared_strings
+
+        shared_strings = parse_shared_strings(root)
+    except ImportError:
+        ss = root.find("SharedStrings")
+        if ss is not None:
+            for child in ss:
+                if child.tag == "SharedString" and child.get("md5"):
+                    shared_strings[child.get("md5")] = (child.text or "").strip()
 
     instances: list[dict] = []
     scripts = 0
@@ -129,7 +156,7 @@ def collect_structure(rbxlx_path: str) -> dict:
                 if not pname:
                     continue
                 if pname == "Tags":
-                    tags = _decode_tags_prop(prop)
+                    tags = _decode_tags_prop(prop, shared_strings)
                 elif prop.tag in ("string", "ProtectedString", "Content", "token", "BinaryString"):
                     # Skip AttributesSerialize — it is intentionally transformed
                     if pname != "AttributesSerialize":

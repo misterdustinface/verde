@@ -108,6 +108,7 @@ These correctness problems were fixed during development and are no longer prese
 20. Tags stored as SharedString are now decoded on extract (and visible to selective `--tag`). `decode_tags_from_prop` / `decode_tags_from_structured` handle BinaryString, string/ProtectedString, and SharedString forms; extract_properties and `_item_has_tag` both use the shared helpers. Residual Tags-decoding duplication inside extract was removed. (PR #29)
 21. Bridge `write_manifest` / `mark_applied` no longer swallow exceptions silently. Both paths now print a short diagnostic (same style as other bridge `!` lines) when the on-disk manifest write fails, while still continuing so the live path stays robust. (PR #32)
 22. `build.py` `_build_instance_maps` now uses the shared `claim_unique_name` helper from `xml_props.py` (and no longer carries a private `_FS_CASE_INSENSITIVE` + while-loop). Completes the shared-helper extraction begun in PR #29; export and import path uniqueness are now a single source of truth. (this PR)
+23. SharedString Tags resolution now looks up the real payload from the root `<SharedStrings>` table (md5 → base64 BinaryString content). Previously the hash itself was treated as BinaryString data, producing garbage tags such as `['iA@NMuvp']` instead of the real list; `verde-test-roundtrip` reported widespread Tags mismatches. Fixed in `xml_props.parse_shared_strings` + decode helpers; extract and the roundtrip test both pass the map. Full root-level SharedStrings preservation remains TODO_FEATURES #2.
 
 ---
 
