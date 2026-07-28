@@ -22,6 +22,11 @@ Referent / Source / Tags / Attributes from meta). UniqueId is omitted so
 Studio assigns a fresh one. If the parent path is also missing the entry is
 still skipped.
 
+Bare script files (.lua / .local.lua / .module.lua) that lack a companion
+.robloxmeta.json are also discovered and treated as new candidates (defaults
+invented from the filename). This matches full-rebuild behaviour and prevents
+hand-added scripts from being silently ignored.
+
 When a .verde/manifest.json is present, files whose simple numeric hash + mtime
 match the recorded entry are skipped early (and mtime-wins is applied against
 the .rbxlx). After a successful import the manifest is refreshed.
@@ -750,6 +755,61 @@ def import_rbxlx(
             }
         )
 
+    # Discover bare script files that have no companion .robloxmeta.json.
+    # Full rebuild invents defaults for these; differential previously ignored
+    # them, so a hand-added .lua never appeared in the place. Now treat them
+    # as new candidates (auto-create under existing parent when possible).
+    for p in input_path.rglob("*"):
+        if not p.is_file() or p.name.startswith("."):
+            continue
+        name = p.name
+        if name.endswith(".local.lua"):
+            class_name = "LocalScript"
+            inst_name = name[: -len(".local.lua")]
+        elif name.endswith(".module.lua"):
+            class_name = "ModuleScript"
+            inst_name = name[: -len(".module.lua")]
+        elif name.endswith(".lua"):
+            class_name = "Script"
+            inst_name = name[: -len(".lua")]
+        else:
+            continue
+        # Companion meta already collected by walk_metas?
+        companion = p.parent / f"{p.stem}.robloxmeta.json"
+        if companion.is_file():
+            continue
+        try:
+            rel = p.relative_to(input_path)
+        except ValueError:
+            continue
+        rel_str = str(rel).replace("\\", "/")
+        path_key = str((rel.parent / inst_name)).replace("\\", "/")
+        if path_key in (".", ""):
+            path_key = ""
+        source = read_text(p)
+        meta = {"ClassName": class_name, "Name": inst_name}
+        related_rels = [rel_str]
+        if not force and manifest is not None and is_file_dirty is not None:
+            any_dirty = False
+            for r in related_rels:
+                if is_file_dirty(input_path, r, manifest, rbxlx_mtime=rbxlx_mtime):
+                    any_dirty = True
+                    break
+            if not any_dirty:
+                skipped_clean += 1
+                continue
+        candidates.append(
+            {
+                "meta_path": p,
+                "rel": rel,
+                "meta": meta,
+                "source": source,
+                "path_key": path_key,
+                "ref": None,
+                "uid": None,
+            }
+        )
+
     # --- Drop redundant disk entries (do not import them) ---
     # Prefer entries that map into the place, then non-uniquified names.
     by_ref: dict[str, dict[str, Any]] = {}
@@ -927,6 +987,8 @@ def main() -> None:
             "Use --preserve-content only when recovering from older corrupted exports. "
             "New folder entries whose parent path already exists in the place are "
             "auto-created (UniqueId left for Studio to assign). "
+            "Bare script files without a companion .robloxmeta.json are also "
+            "discovered and auto-created when the parent exists. "
             "Referent is read from machine-local *.robloxmeta.local.json when present."
         )
     )
