@@ -53,6 +53,25 @@ def load_interesting_props(luau_path: Path | None = None) -> set[str]:
         }
 
     text = path.read_text(encoding="utf-8")
-    # Extract every "string" literal that appears inside the returned table.
-    # The file is deliberately a flat list of strings, so this is reliable.
+    # Prefer line-oriented extraction of table string entries so comments
+    # and incidental double-quoted strings do not pollute the set.
+    props: set[str] = set()
+    in_table = False
+    for line in text.splitlines():
+        # Drop Luau line comments before matching
+        stripped = line.split("--", 1)[0].strip()
+        if not stripped:
+            continue
+        if not in_table and "return" in stripped and "{" in stripped:
+            in_table = True
+            continue
+        if in_table and stripped.startswith("}"):
+            break
+        if in_table:
+            m = re.match(r'^"([^"]+)"\s*,?\s*$', stripped)
+            if m:
+                props.add(m.group(1))
+    if props:
+        return props
+    # Fallback for unexpected formats (whole-file scan of double-quoted strings)
     return set(re.findall(r'"([^"]+)"', text))
