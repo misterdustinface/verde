@@ -116,6 +116,27 @@ def parse_property_element(prop: ET.Element) -> dict[str, Any]:
     return result
 
 
+def parse_shared_strings(root: ET.Element) -> dict[str, str]:
+    """Build md5 → base64-payload map from the root <SharedStrings> table.
+
+    Studio places frequently store Tags (and some other long strings) as
+    SharedString references whose real BinaryString-style content lives here.
+    The key is the md5 attribute; the element text is the base64 of the value.
+    """
+    table: dict[str, str] = {}
+    ss = root.find("SharedStrings")
+    if ss is None:
+        return table
+    for child in ss:
+        if child.tag != "SharedString":
+            continue
+        md5 = child.get("md5")
+        if not md5:
+            continue
+        table[md5] = (child.text or "").strip()
+    return table
+
+
 def _decode_tags_text(text: str) -> list[str]:
     """Split a Tags string (comma or null separated) into a clean list."""
     return [t.strip() for t in text.replace("\0", ",").split(",") if t.strip()]
@@ -124,6 +145,8 @@ def _decode_tags_text(text: str) -> list[str]:
 def _decode_tags_binary(raw: str) -> list[str]:
     """Decode a base64 BinaryString Tags value (null-separated UTF-8)."""
     cleaned = (raw or "").replace("\n", "").replace(" ", "")
+    if not cleaned:
+        return []
     try:
         data = base64.b64decode(cleaned)
         return [t.decode("utf-8", errors="replace") for t in data.split(b"\0") if t]
@@ -131,29 +154,43 @@ def _decode_tags_binary(raw: str) -> list[str]:
         return []
 
 
-def decode_tags_from_prop(prop: ET.Element) -> list[str]:
+def decode_tags_from_prop(
+    prop: ET.Element,
+    shared_strings: dict[str, str] | None = None,
+) -> list[str]:
     """
     Decode Tags from BinaryString, string/ProtectedString, or SharedString.
     Returns [] on failure or empty.
+
+    When the property is a SharedString, *shared_strings* (from
+    parse_shared_strings) is used to resolve the md5 key to the real payload.
+    The hash itself is never treated as tag data.
     """
     if prop.tag == "BinaryString":
         return _decode_tags_binary(prop.text or "")
-    # SharedString may carry the payload as text or as a child.
     if prop.tag == "SharedString":
-        if prop.text and prop.text.strip():
-            return _decode_tags_text(prop.text)
-        for child in prop:
-            if child.text and child.text.strip():
-                try:
-                    return _decode_tags_binary(child.text)
-                except Exception:
-                    return _decode_tags_text(child.text)
+        key = (prop.text or "").strip()
+        if not key:
+            # Rare child form (legacy / non-standard)
+            for child in prop:
+                if child.text and child.text.strip():
+                    try:
+                        return _decode_tags_binary(child.text)
+                    except Exception:
+                        return _decode_tags_text(child.text)
+            return []
+        if shared_strings and key in shared_strings:
+            return _decode_tags_binary(shared_strings[key])
+        # Unknown / missing table entry → empty (do not decode the hash)
         return []
     # string / ProtectedString / anything else with text
     return _decode_tags_text(prop.text or "")
 
 
-def decode_tags_from_structured(structured: dict[str, Any]) -> list[str]:
+def decode_tags_from_structured(
+    structured: dict[str, Any],
+    shared_strings: dict[str, str] | None = None,
+) -> list[str]:
     """
     Decode Tags from a structured property dict produced by parse_property_element.
     Handles BinaryString, string/ProtectedString, and SharedString forms.
@@ -167,11 +204,10 @@ def decode_tags_from_structured(structured: dict[str, Any]) -> list[str]:
         return _decode_tags_text(str(structured.get("value") or ""))
     if typ == "SharedString":
         val = structured.get("value")
-        if isinstance(val, str) and val.strip():
-            try:
-                return _decode_tags_binary(val)
-            except Exception:
-                return _decode_tags_text(val)
+        key = str(val).strip() if isinstance(val, str) else ""
+        if key and shared_strings and key in shared_strings:
+            return _decode_tags_binary(shared_strings[key])
+        # children form (uncommon for Tags)
         children = structured.get("children")
         if isinstance(children, dict):
             for v in children.values():
