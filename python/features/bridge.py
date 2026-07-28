@@ -89,8 +89,8 @@ class BridgeState:
             try:
                 write_manifest(self.root, extra={"live_sync": True})
                 self.manifest = load_manifest(self.root) or self.manifest
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"  ! write_manifest failed after mark_applied: {e}")
 
     def write_file(self, rel: str, content: str | bytes, is_binary: bool = False) -> bool:
         path = self.root / rel
@@ -133,8 +133,8 @@ class BridgeState:
                 try:
                     write_manifest(self.root, extra={"live_sync": True})
                     self.manifest = load_manifest(self.root) or self.manifest
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"  ! write_manifest failed after write_file {rel}: {e}")
             return True
         except Exception as e:
             print(f"  ! failed to write {rel}: {e}")
