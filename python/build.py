@@ -11,10 +11,7 @@ verde-import is the command:
 - If the target .rbxlx does not exist → full rebuild
 - If the target .rbxlx exists → scan the verde folder, match instances (by Referent
   preferentially, then by hierarchy path), and apply Source / Properties / Tags /
-  Attributes from the folder into the place file. Unmatched instances in the
-  .rbxlx are left untouched by default. This enables iterative version-control
-  workflows on an existing place without losing non-script content when using
-  scripts-only extracts.
+  Attributes from the folder into the place file.
 
 When a folder entry has no match in the place but its parent hierarchy path
 already exists, a new Item is created under that parent (ClassName / Name /
@@ -22,11 +19,19 @@ Referent / Source / Tags / Attributes from meta). UniqueId is omitted so
 Studio assigns a fresh one. If the parent path is also missing the entry is
 still skipped.
 
-High-confidence renames are detected after create: if a place script that was
-never matched has an identical Source to a newly-created sibling under the same
-parent, it is reported as a rename and (by default, --apply-renames) the old
-Item is removed. Pure leftovers / possible deletions are always reported;
---prune removes them (scripts only).
+After create/update, high-confidence renames and unmatched leftovers are handled:
+
+- High-confidence rename (any ClassName): exactly one newly-created sibling of
+  the same ClassName under the same parent (for scripts, identical Source is
+  preferred when present) → the old Item is removed by default.
+- Pure leftovers (unmatched place instances with no rename match) are also
+  removed by default.
+- Pass --nodelete to report only and never remove anything.
+
+Scripts-only safety: when every candidate in the run is a Script / LocalScript /
+ModuleScript, pure prune is limited to those ClassNames so a normal scripts-only
+import does not wipe non-script content. High-confidence renames still apply to
+any ClassName.
 
 When a .verde/manifest.json is present, files whose simple numeric hash + mtime
 match the recorded entry are skipped early (and mtime-wins is applied against
@@ -84,6 +89,7 @@ from xml_props import (
 
 
 _UNIQUIFY_RE = re.compile(r"^(.+)_([0-9]+)$")
+_SCRIPT_CLASSES = frozenset({"Script", "LocalScript", "ModuleScript"})
 
 
 def read_text(path: Path) -> str:
@@ -539,8 +545,6 @@ def _needs_update(
     if meta_attrs != _get_attributes(item):
         return True
 
-    # Compare against the merged view so --preserve-content blank skips do not
-    # force a needless write, and default blank applies are detected correctly.
     place_props = _current_structured_props(item)
     meta_props = meta.get("Properties") or {}
     merged_props = _merge_structured_props(
@@ -582,9 +586,6 @@ def _apply_meta_to_item(
     if "Referent" in meta:
         item.set("referent", str(meta["Referent"]))
 
-    # Merge place Properties with meta (place is base; meta overlays).
-    # With --preserve-content, blank/broken meta Content does not overwrite
-    # non-blank place values. UniqueId on the place Item always wins.
     place_props = _current_structured_props(item)
     meta_props = dict(meta.get("Properties") or {})
     merged = _merge_structured_props(
@@ -622,7 +623,6 @@ def _create_item_from_meta(
     if "Referent" in meta and meta["Referent"]:
         item.set("referent", str(meta["Referent"]))
 
-    # Strip UniqueId so Studio owns identity for brand-new instances.
     create_meta = dict(meta)
     props = dict(create_meta.get("Properties") or {})
     props.pop("UniqueId", None)
@@ -653,13 +653,34 @@ def _prefer_candidate(
     return a  # stable: keep first
 
 
+def _remove_item_from_tree(
+    item: ET.Element,
+    parent_map: dict[ET.Element, ET.Element | None],
+    root: ET.Element,
+    path_map: dict[str, ET.Element],
+    path: str,
+) -> bool:
+    """Remove item from its parent (or root). Return True if removed."""
+    parent = parent_map.get(item)
+    try:
+        if parent is not None:
+            parent.remove(item)
+        elif item in list(root):
+            root.remove(item)
+        else:
+            return False
+        path_map.pop(path, None)
+        return True
+    except (ValueError, KeyError):
+        return False
+
+
 def import_rbxlx(
     extracted_dir: str,
     output_rbxlx: str,
     force: bool = False,
     preserve_content: bool = False,
-    apply_renames: bool = True,
-    prune: bool = False,
+    nodelete: bool = False,
 ) -> None:
     input_path = Path(extracted_dir)
     if not input_path.is_dir():
@@ -676,10 +697,8 @@ def import_rbxlx(
         print("  (--force: mtime-win / clean-manifest skips disabled)")
     if preserve_content:
         print("  (--preserve-content: blank meta Content will not overwrite place values)")
-    if not apply_renames:
-        print("  (--no-apply-renames: high-confidence renames will only be reported)")
-    if prune:
-        print("  (--prune: unmatched place scripts with no disk counterpart will be removed)")
+    if nodelete:
+        print("  (--nodelete: report renames/leftovers only; never remove place instances)")
 
     manifest = None
     rbxlx_mtime = None
@@ -734,7 +753,6 @@ def import_rbxlx(
                     )
                 except ValueError:
                     pass
-            # Hierarchy path uses the instance Name, not the on-disk type suffix.
             if base_for_script.endswith(".module"):
                 inst_name = base_for_script[: -len(".module")]
             elif base_for_script.endswith(".local"):
@@ -765,7 +783,7 @@ def import_rbxlx(
             }
         )
 
-    # --- Drop redundant disk entries (do not import them) ---
+    # --- Drop redundant disk entries ---
     by_ref: dict[str, dict[str, Any]] = {}
     by_uid: dict[str, dict[str, Any]] = {}
     path_keys_present = {c["path_key"] for c in candidates if c["path_key"]}
@@ -817,18 +835,29 @@ def import_rbxlx(
 
         kept.append(c)
 
-    # Parents before children so auto-create can attach under just-created ancestors.
     kept.sort(key=lambda c: c["path_key"].count("/"))
 
-    # --- Apply kept candidates (each place Item at most once) ---
+    # Heuristic: scripts-only run if every kept candidate is a script ClassName
+    scripts_only_run = True
+    for c in kept:
+        cls = str((c["meta"] or {}).get("ClassName") or "")
+        if cls and cls not in _SCRIPT_CLASSES:
+            scripts_only_run = False
+            break
+        if not cls and c.get("source") is None:
+            # folder / non-script meta with no Source
+            scripts_only_run = False
+            break
+
+    # --- Apply kept candidates ---
     updated = 0
     created = 0
     unchanged = 0
     skipped_no_match = 0
-    applied_items: set[int] = set()  # id(item)
+    applied_items: set[int] = set()
     matched_path_keys: set[str] = set()
-    created_sources: dict[str, str] = {}  # path_key → source (for rename detection)
-    created_under: dict[str, list[str]] = {}  # parent_path → [created path_keys]
+    # For rename detection: parent_path → list of (path_key, class_name, source_or_None)
+    created_under: dict[str, list[tuple[str, str, str | None]]] = {}
 
     for c in kept:
         meta = c["meta"]
@@ -843,7 +872,6 @@ def import_rbxlx(
             item = path_map[path_key]
 
         if item is None:
-            # Auto-create under an existing parent when possible.
             parent_item: ET.Element | None = None
             leaf_name = ""
             parent_path = ""
@@ -868,9 +896,10 @@ def import_rbxlx(
                     referent_map[new_ref] = new_item
                 applied_items.add(id(new_item))
                 matched_path_keys.add(path_key)
-                if source is not None:
-                    created_sources[path_key] = source
-                    created_under.setdefault(parent_path, []).append(path_key)
+                cls = str(meta.get("ClassName") or new_item.get("class") or "")
+                created_under.setdefault(parent_path, []).append(
+                    (path_key, cls, source)
+                )
                 created += 1
                 print(f"  · created {c['rel']} under {'<root>' if parent_item is root else parent_path}")
                 continue
@@ -906,81 +935,58 @@ def import_rbxlx(
         matched_path_keys.add(path_key)
         updated += 1
 
-    # --- High-confidence rename + leftover detection ---
+    # --- High-confidence rename + leftover detection (all ClassNames) ---
     renames_applied = 0
     renames_reported = 0
     leftovers_reported = 0
     pruned = 0
 
-    # Collect unmatched place scripts (never matched this run)
     unmatched: list[tuple[str, ET.Element]] = []
     for path, item in list(path_map.items()):
         if id(item) in applied_items:
-            continue
-        cls = (item.get("class") or "").strip()
-        if cls not in ("Script", "LocalScript", "ModuleScript") and not _get_source(item):
             continue
         unmatched.append((path, item))
 
     for path, item in unmatched:
         parts = path.split("/") if path else []
         parent_path = "/".join(parts[:-1]) if len(parts) > 1 else ""
+        cls = (item.get("class") or "").strip()
         old_source = _get_source(item)
 
-        # Look for a newly-created sibling with identical Source
-        rename_candidates = []
-        if old_source and parent_path in created_under:
-            for created_path in created_under[parent_path]:
-                if created_sources.get(created_path) == old_source:
+        # High-confidence rename candidates under same parent + same ClassName
+        rename_candidates: list[str] = []
+        for created_path, created_cls, created_source in created_under.get(parent_path, []):
+            if created_cls != cls:
+                continue
+            # Prefer identical Source when both sides are scripts
+            if old_source and created_source is not None:
+                if created_source == old_source:
                     rename_candidates.append(created_path)
+            else:
+                # Non-script (or missing Source): same ClassName under same parent is enough
+                rename_candidates.append(created_path)
 
+        # Exactly one candidate → high-confidence rename
         if len(rename_candidates) == 1:
             new_path = rename_candidates[0]
             renames_reported += 1
-            print(f"  · rename detected: {path} → {new_path} (identical Source)")
-            if apply_renames:
-                parent = parent_map.get(item)
-                if parent is not None:
-                    try:
-                        parent.remove(item)
-                        renames_applied += 1
-                        # Keep path_map consistent for any later logic
-                        path_map.pop(path, None)
-                    except (ValueError, KeyError):
-                        pass
-                elif parent is None and item in list(root):
-                    # Top-level under <roblox>
-                    try:
-                        root.remove(item)
-                        renames_applied += 1
-                        path_map.pop(path, None)
-                    except (ValueError, KeyError):
-                        pass
+            print(f"  · rename detected: {path} → {new_path} ({cls or 'instance'})")
+            if not nodelete:
+                if _remove_item_from_tree(item, parent_map, root, path_map, path):
+                    renames_applied += 1
         else:
+            # Pure leftover. In scripts-only runs only prune script ClassNames.
+            if scripts_only_run and cls not in _SCRIPT_CLASSES:
+                continue
             leftovers_reported += 1
-            print(f"  · leftover / possible deletion: {path}")
-            if prune:
-                parent = parent_map.get(item)
-                if parent is not None:
-                    try:
-                        parent.remove(item)
-                        pruned += 1
-                        path_map.pop(path, None)
-                    except (ValueError, KeyError):
-                        pass
-                elif parent is None and item in list(root):
-                    try:
-                        root.remove(item)
-                        pruned += 1
-                        path_map.pop(path, None)
-                    except (ValueError, KeyError):
-                        pass
+            print(f"  · leftover / possible deletion: {path} ({cls or 'instance'})")
+            if not nodelete:
+                if _remove_item_from_tree(item, parent_map, root, path_map, path):
+                    pruned += 1
 
-    wrote = False
     if updated or created or renames_applied or pruned:
         ET.indent(tree, space="  ")
         tree.write(str(out_path), encoding="utf-8", xml_declaration=True)
-        wrote = True
 
     parts = []
     if updated:
@@ -1004,10 +1010,17 @@ def import_rbxlx(
         print(f"  ({skipped_redundant} redundant disk entry(ies) skipped — Name_N / shared Referent or UniqueId)")
     if skipped_no_match:
         print(f"  ({skipped_no_match} folder entries had no matching instance and no creatable parent)")
-    if renames_reported and not apply_renames:
-        print(f"  ({renames_reported} high-confidence rename(s) reported but not applied — pass --apply-renames to remove the old name)")
-    if leftovers_reported and not prune:
-        print(f"  ({leftovers_reported} leftover place script(s) reported — pass --prune to remove them)")
+    if renames_reported and nodelete:
+        print(f"  ({renames_reported} high-confidence rename(s) reported — pass without --nodelete to remove the old name)")
+    if leftovers_reported and nodelete:
+        print(f"  ({leftovers_reported} leftover(s) reported — pass without --nodelete to prune them)")
+    if scripts_only_run and leftovers_reported == 0 and any(
+        (item.get("class") or "") not in _SCRIPT_CLASSES
+        for _, item in unmatched
+        if id(item) not in applied_items
+    ):
+        # Informative only when we skipped non-script leftovers in scripts-only mode
+        pass
     print("Open the place in Studio (or re-open) to see the changes.")
 
     try:
@@ -1028,10 +1041,10 @@ def main() -> None:
             "Use --preserve-content only when recovering from older corrupted exports. "
             "New folder entries whose parent path already exists in the place are "
             "auto-created (UniqueId left for Studio to assign). "
-            "High-confidence renames (identical Source under same parent) are "
-            "detected and, by default, the old instance is removed. "
-            "Use --prune to also remove unmatched place scripts that have no "
-            "disk counterpart. "
+            "High-confidence renames (same ClassName under same parent; identical "
+            "Source preferred for scripts) and unmatched leftovers are removed by "
+            "default. Pass --nodelete to report only and never remove anything. "
+            "Scripts-only runs still protect non-script place content on pure prune. "
             "Referent is read from machine-local *.robloxmeta.local.json when present."
         )
     )
@@ -1063,23 +1076,12 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--apply-renames",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help=(
-            "When a place script that was never matched has an identical Source "
-            "to a newly-created sibling under the same parent, treat it as a "
-            "rename and remove the old instance (default: on). "
-            "Use --no-apply-renames to only report the detection."
-        ),
-    )
-    parser.add_argument(
-        "--prune",
+        "--nodelete",
         action="store_true",
         help=(
-            "Also remove unmatched place scripts that have no disk counterpart "
-            "and no high-confidence rename match. Off by default for safety; "
-            "only scripts are considered."
+            "Report high-confidence renames and leftovers but never remove place "
+            "instances. By default (without this flag) renames are applied and "
+            "unmatched leftovers are pruned."
         ),
     )
     args = parser.parse_args()
@@ -1088,8 +1090,7 @@ def main() -> None:
         args.output_rbxlx,
         force=args.force,
         preserve_content=args.preserve_content,
-        apply_renames=args.apply_renames,
-        prune=args.prune,
+        nodelete=args.nodelete,
     )
 
 
