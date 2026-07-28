@@ -32,9 +32,7 @@ search, and edit.
 from __future__ import annotations
 
 import argparse
-import base64
 import json
-import platform
 import re
 import shutil
 import sys
@@ -50,12 +48,17 @@ from features.meta import (
     split_local_keys,
 )
 from interesting import load_interesting_props
-from xml_props import sanitize_name, parse_children, parse_property_element, decode_tags_from_prop
+from xml_props import (
+    FS_CASE_INSENSITIVE,
+    claim_unique_name,
+    decode_tags_from_prop,
+    decode_tags_from_structured,
+    parse_property_element,
+    sanitize_name,
+)
 
 
 SCRIPT_EXTS = (".lua", ".local.lua", ".module.lua")
-
-_FS_CASE_INSENSITIVE = platform.system() in ("Darwin", "Windows")
 
 # Pattern that must appear in the extracted folder's .gitignore so machine-local
 # Referent files are never committed. Also used when creating a fresh file.
@@ -97,20 +100,11 @@ def extract_properties(
         structured = parse_property_element(prop)
         full[prop_name] = structured
 
-        if prop_name == "Tags" and structured.get("type") == "BinaryString":
-            raw = (structured.get("value") or "").replace("\n", "").replace(" ", "")
-            try:
-                data = base64.b64decode(raw)
-                tags = [t.decode("utf-8", errors="replace") for t in data.split(b"\0") if t]
-            except Exception:
-                tags = [t.strip() for t in (structured.get("value") or "").replace("\0", ",").split(",") if t.strip()]
-            full.pop("Tags", None)
-            continue
-
-        if prop_name == "Tags" and structured.get("type") in ("string", "ProtectedString"):
-            text = structured.get("value") or ""
-            tags = [t.strip() for t in text.replace("\0", ",").split(",") if t.strip()]
-            full.pop("Tags", None)
+        if prop_name == "Tags":
+            decoded = decode_tags_from_structured(structured)
+            if decoded:
+                tags = decoded
+                full.pop("Tags", None)
             continue
 
         if prop_name == "AttributesSerialize" and structured.get("type") == "BinaryString":
@@ -157,7 +151,7 @@ def _resolve_name(
 
 
 def _item_has_tag(item: ET.Element, tag: str) -> bool:
-    """Quick check without full property parse — Tags BinaryString or string."""
+    """Quick check — any Tags form (BinaryString / string / SharedString)."""
     props = item.find("Properties")
     if props is None:
         return False
@@ -165,16 +159,7 @@ def _item_has_tag(item: ET.Element, tag: str) -> bool:
     for prop in props:
         if prop.get("name") != "Tags":
             continue
-        if prop.tag == "BinaryString":
-            raw = (prop.text or "").replace("\n", "").replace(" ", "")
-            try:
-                data = base64.b64decode(raw)
-                tags = [t.decode("utf-8", errors="replace") for t in data.split(b"\0") if t]
-            except Exception:
-                tags = []
-            return any(t.lower() == tag_lower for t in tags)
-        text = prop.text or ""
-        tags = [t.strip() for t in text.replace("\0", ",").split(",") if t.strip()]
+        tags = decode_tags_from_prop(prop)
         return any(t.lower() == tag_lower for t in tags)
     return False
 
@@ -297,7 +282,7 @@ def _cleanup_orphaned_uniquified(root: Path, written: dict[Path, set[str]]) -> i
                     stem = entry.name[: -len(ext)]
                     break
             # Already used this run → keep
-            if _FS_CASE_INSENSITIVE:
+            if FS_CASE_INSENSITIVE:
                 if any(stem.casefold() == u.casefold() for u in used):
                     continue
             else:
@@ -307,7 +292,7 @@ def _cleanup_orphaned_uniquified(root: Path, written: dict[Path, set[str]]) -> i
             if not m:
                 continue
             base = m.group(1)
-            if _FS_CASE_INSENSITIVE:
+            if FS_CASE_INSENSITIVE:
                 base_used = any(base.casefold() == u.casefold() for u in used)
             else:
                 base_used = base in used
@@ -480,15 +465,7 @@ def extract(
         name = sanitize_name(raw_name)
 
         claimed = used_names.setdefault(current, set())
-
-        base_name = name
-        counter = 1
-        key = name.casefold() if _FS_CASE_INSENSITIVE else name
-        while key in claimed:
-            counter += 1
-            name = f"{base_name}_{counter}"
-            key = name.casefold() if _FS_CASE_INSENSITIVE else name
-        claimed.add(key)
+        name = claim_unique_name(name, claimed)
         written_names.setdefault(current, set()).add(name)
 
         full_path = current / name
