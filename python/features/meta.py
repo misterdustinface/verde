@@ -40,12 +40,6 @@ def load_meta(path: Path) -> dict[str, Any] | None:
         return None
 
 
-def save_meta(path: Path, meta: dict[str, Any]) -> None:
-    """Write a shared meta file. Strips LOCAL_META_KEYS so Referent never lands in VCS."""
-    shared = {k: v for k, v in meta.items() if k not in LOCAL_META_KEYS}
-    path.write_text(json.dumps(shared, indent=2), encoding="utf-8")
-
-
 def local_meta_path(shared_meta_path: Path) -> Path:
     """Return the machine-local sibling path for a shared .robloxmeta.json."""
     name = shared_meta_path.name
@@ -81,6 +75,30 @@ def save_local_meta(shared_meta_path: Path, local: dict[str, Any]) -> None:
         return
     local_path.parent.mkdir(parents=True, exist_ok=True)
     local_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def save_meta(path: Path, meta: dict[str, Any]) -> None:
+    """Write shared meta + machine-local sibling.
+
+    LOCAL_META_KEYS (e.g. Referent) are never written into the shared file.
+    If they are present on the in-memory dict they are migrated into the
+    *.robloxmeta.local.json sibling so a set/tags pass on an old tree does
+    not silently drop them.
+    """
+    shared, local = split_local_keys(meta)
+    path.write_text(json.dumps(shared, indent=2), encoding="utf-8")
+    # Also preserve any local keys that were on the in-memory meta (e.g. an
+    # old shared Referent loaded via walk_metas, or a value from the sibling).
+    # If the caller already has a local sibling with the same value this is a
+    # no-op rewrite; if the value only lived on shared, this migrates it.
+    if local:
+        save_local_meta(path, local)
+    else:
+        # Don't delete an existing local sibling just because this save didn't
+        # carry the key — the in-memory dict may have been a partial update.
+        # Callers that intentionally clear Referent should call save_local_meta
+        # themselves with an empty payload.
+        pass
 
 
 def load_meta_merged(shared_meta_path: Path) -> dict[str, Any] | None:
@@ -122,7 +140,8 @@ def walk_metas(root: Path) -> Iterator[tuple[Path, dict[str, Any]]]:
     work on the machine that owns the .local.json files.
     """
     for p in root.rglob("*.robloxmeta.json"):
-        # Skip the local files themselves if a naming collision ever occurs
+        # Defensive: local siblings end in .robloxmeta.local.json and should not
+        # match the glob, but skip them explicitly if a naming collision appears.
         if p.name.endswith(LOCAL_META_SUFFIX):
             continue
         meta = load_meta_merged(p)
