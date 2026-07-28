@@ -54,6 +54,7 @@ from xml_props import (
     decode_tags_from_prop,
     decode_tags_from_structured,
     parse_property_element,
+    parse_shared_strings,
     sanitize_name,
 )
 
@@ -81,7 +82,9 @@ def get_script_extension(class_name: str) -> str:
 
 
 def extract_properties(
-    item: ET.Element, interesting: set[str]
+    item: ET.Element,
+    interesting: set[str],
+    shared_strings: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], list[str], dict[str, Any], dict[str, Any]]:
     flat: dict[str, Any] = {}
     tags: list[str] = []
@@ -101,7 +104,7 @@ def extract_properties(
         full[prop_name] = structured
 
         if prop_name == "Tags":
-            decoded = decode_tags_from_structured(structured)
+            decoded = decode_tags_from_structured(structured, shared_strings)
             if decoded:
                 tags = decoded
                 full.pop("Tags", None)
@@ -150,7 +153,11 @@ def _resolve_name(
     return "Unnamed"
 
 
-def _item_has_tag(item: ET.Element, tag: str) -> bool:
+def _item_has_tag(
+    item: ET.Element,
+    tag: str,
+    shared_strings: dict[str, str] | None = None,
+) -> bool:
     """Quick check — any Tags form (BinaryString / string / SharedString)."""
     props = item.find("Properties")
     if props is None:
@@ -159,7 +166,7 @@ def _item_has_tag(item: ET.Element, tag: str) -> bool:
     for prop in props:
         if prop.get("name") != "Tags":
             continue
-        tags = decode_tags_from_prop(prop)
+        tags = decode_tags_from_prop(prop, shared_strings)
         return any(t.lower() == tag_lower for t in tags)
     return False
 
@@ -169,6 +176,7 @@ def _compute_keep_map(
     *,
     scripts_only: bool = True,
     tag_filter: str | None = None,
+    shared_strings: dict[str, str] | None = None,
 ) -> dict[int, bool]:
     """Bottom-up keep: scripts and/or tagged instances, plus their ancestors."""
     keep: dict[int, bool] = {}
@@ -193,7 +201,7 @@ def _compute_keep_map(
         has_kept_child = any(
             keep.get(id(c), False) for c in item if c.tag == "Item"
         )
-        has_tag = bool(tag_filter) and _item_has_tag(item, tag_filter)
+        has_tag = bool(tag_filter) and _item_has_tag(item, tag_filter, shared_strings)
 
         if scripts_only and tag_filter:
             keep[id(item)] = is_script or has_tag or has_kept_child
@@ -411,6 +419,8 @@ def extract(
     tree = ET.parse(rbxlx_path)
     root = tree.getroot()
 
+    shared_strings = parse_shared_strings(root)
+
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -438,6 +448,7 @@ def extract(
             start_items if root_filter else [c for c in root if c.tag == "Item"],
             scripts_only=scripts_only,
             tag_filter=tag_filter,
+            shared_strings=shared_strings,
         )
         if tag_filter:
             print(f"  Selective tag: {tag_filter}")
@@ -460,7 +471,9 @@ def extract(
         class_name = item.get("class", "Folder")
         referent = item.get("referent")
 
-        flat, tags, full_props, attributes = extract_properties(item, interesting)
+        flat, tags, full_props, attributes = extract_properties(
+            item, interesting, shared_strings
+        )
         raw_name = _resolve_name(item, flat, full_props)
         name = sanitize_name(raw_name)
 
