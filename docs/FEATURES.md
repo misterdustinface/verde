@@ -17,11 +17,16 @@ Parses a Roblox place file into a hierarchy of folders + `.robloxmeta.json` (and
 **Machine-local Referent**  
 The XML `referent` attribute is a serialization-time ID local to one `.rbxlx` / Studio session. It is useful for matching and exact Ref re-emission on the same machine, but it churns across saves and must not be version-controlled. Shared `.robloxmeta.json` files therefore never contain a top-level `"Referent"` key. When a Referent is present it is written to a sibling `*.robloxmeta.local.json` (gitignored). Import, Live Sync, and search load the merged view (shared + local) so matching continues to work on the producing machine. Old shared files that still contain `"Referent"` remain readable for backward compatibility; the next export moves the key into the local sibling.
 
+On every successful export, Verde also ensures a top-level `.gitignore` in the extracted folder ignores `*.robloxmeta.local.json`:
+- missing file → creates a short Verde block;
+- existing file missing the pattern → appends it;
+- already present → left unchanged.
+
 **Selective export**  
 `--root PATH` (dot-separated Names, e.g. `ServerScriptService` or `Workspace.MyModel`) starts the export from that instance as the top of the output tree. `--tag TAG` keeps only instances that carry the tag (or ancestors of tagged instances) so hierarchy is preserved. Both combine with the scripts-only keep map. A `.verde/partial.json` records the filter for future import grafting.
 
 **Key components**  
-- `python/extract.py` (iterative stack walk + progress, keep-map, prune, selective root/tag, local-meta split)
+- `python/extract.py` (iterative stack walk + progress, keep-map, prune, selective root/tag, local-meta split, `.gitignore` ensure)
 - `python/features/meta.py` (`load_meta_merged`, `save_local_meta`, `split_local_keys`)
 - `python/attributes.py` (AttributesSerialize decode)
 - `python/interesting.py` + `luau/interesting_properties.luau`
