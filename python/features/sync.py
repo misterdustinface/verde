@@ -98,7 +98,7 @@ def write_manifest(
     rbxlx_path: str | Path | None = None,
     extra: dict[str, Any] | None = None,
 ) -> Path:
-    """Write / overwrite the manifest after a successful extract or merge."""
+    """Write / overwrite the manifest after a successful export or merge."""
     root = Path(root)
     manifest_dir = root / MANIFEST_DIR
     manifest_dir.mkdir(parents=True, exist_ok=True)
@@ -257,9 +257,9 @@ def main() -> None:
         if args.dry_run:
             print("  (would run verde-export)")
             return
-        from extract import extract
+        from export import export
 
-        extract(str(rbxlx), str(root), scripts_only=True)
+        export(str(rbxlx), str(root), scripts_only=True)
         write_manifest(root, rbxlx_path=rbxlx)
         print("Manifest updated after pull.")
         return
