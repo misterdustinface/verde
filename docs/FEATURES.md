@@ -14,8 +14,23 @@ Planned work lives in `TODO_FEATURES.md`. Defects live in `BUGS.md`.
 **Description**  
 Parses a Roblox place file into a hierarchy of folders + `.robloxmeta.json` (and script source files). Default is scripts-only (only paths leading to Script/LocalScript/ModuleScript); `--all` exports the full instance tree. Empty directories are pruned. Existing on-disk paths are reused on re-export; content is compared so identical files are left untouched (overwrite on diff, or `--interactive` prompt). Sibling Name collisions are uniquified within a run; case-insensitive uniqueness is enforced on Darwin/Windows to prevent silent overwrites. Name is taken from the Name property (preferred) or Item@name attribute. After export a `.verde/manifest.json` (adler32 + mtime) is written for later merge/import skipping.
 
-**Machine-local Referent**  
-The XML `referent` attribute is a serialization-time ID local to one `.rbxlx` / Studio session. It is useful for matching and exact Ref re-emission on the same machine, but it churns across saves and must not be version-controlled. Shared `.robloxmeta.json` files therefore never contain a top-level `"Referent"` key. When a Referent is present it is written to a sibling `*.robloxmeta.local.json` (gitignored). Import, Live Sync, and search load the merged view (shared + local) so matching continues to work on the producing machine. Old shared files that still contain `"Referent"` remain readable for backward compatibility; the next export moves the key into the local sibling.
+**Machine-local metadata (local-only keys)**  
+Top-level keys that are local to one machine / one Studio session and must not be version-controlled are written only to a sibling `*.robloxmeta.local.json` (gitignored). The shared `.robloxmeta.json` never contains them.
+
+Current local-only keys (`LOCAL_META_KEYS` in `python/features/meta.py`):
+
+- `Referent`
+
+Rationale for `Referent`:  
+The XML `referent` attribute is a serialization-time ID local to one `.rbxlx` / Studio session. It is useful for matching and exact Ref re-emission on the same machine, but it churns across saves. Import, Live Sync, and search load the merged view (shared + local) so matching continues to work on the producing machine. Old shared files that still contain `"Referent"` remain readable for backward compatibility; the next export moves the key into the local sibling.
+
+Candidates for future expansion (not yet enforced as local-only):
+
+- Raw referent strings that appear as values of `Ref`-typed Properties (e.g. PrimaryPart, object references). These are the same class of session-local ID and currently remain in shared `Properties`.
+- Absolute / machine-specific paths if ever stored on a meta dict.
+- Any other pure session-only or bridge-state fields.
+
+Stable identifiers that are real Instance properties (the `UniqueId` property) stay in shared metadata. Studio Live Sync already maps `UniqueId` into the `Referent` key so matching uses the local sibling.
 
 On every successful export, Verde also ensures a top-level `.gitignore` in the extracted folder ignores `*.robloxmeta.local.json`:
 - missing file → creates a short Verde block;

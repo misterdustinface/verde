@@ -8,15 +8,32 @@ prompts) that are shared across feature CLIs.
 
 Machine-local metadata
 ----------------------
-The XML `referent` attribute is a serialization-time ID local to one .rbxlx
-file / one Studio session. It is useful for matching and for exact Ref
-re-emission on the same machine, but it churns across saves and must not be
-checked into version control.
+Top-level keys that are local to one machine / one Studio session and must
+not be version-controlled live only in the sibling *.robloxmeta.local.json
+(gitignored). The shared *.robloxmeta.json never contains them.
 
-Shared meta files (*.robloxmeta.json) therefore never contain a top-level
-"Referent" key. When a Referent is known it is written to a sibling
-*.robloxmeta.local.json (gitignored). load_meta_merged() overlays the local
-file so import / Live Sync / search still see the value when present.
+Current local-only keys (LOCAL_META_KEYS):
+  - Referent
+
+Rationale for Referent:
+  The XML `referent` attribute is a serialization-time ID local to one
+  .rbxlx / one Studio session. It is useful for matching and for exact
+  Ref re-emission on the producing machine, but it churns across saves.
+  load_meta_merged() overlays the local file so import / Live Sync /
+  search still see the value when present. Old shared files that still
+  contain "Referent" remain readable for backward compatibility; the next
+  export migrates the key into the local sibling.
+
+Candidates for future expansion of LOCAL_META_KEYS (not yet enforced):
+  - Raw referent strings that appear as values of Ref-typed Properties
+    (PrimaryPart, object references, etc.). These are the same class of
+    session-local ID and currently remain in shared Properties.
+  - Absolute / machine-specific paths if ever stored on a meta dict.
+  - Any other pure session-only or bridge-state fields.
+
+Stable identifiers that are real Instance properties (the UniqueId
+property) stay in shared metadata. Studio Live Sync already maps
+UniqueId into the Referent key so matching uses the local sibling.
 
 AI agent notes
 --------------
@@ -33,6 +50,8 @@ from typing import Any, Iterator
 
 
 # Keys that belong only in the machine-local sibling file.
+# Currently only "Referent". See module docstring for rationale and
+# candidates for future expansion.
 LOCAL_META_KEYS = frozenset({"Referent"})
 
 LOCAL_META_SUFFIX = ".robloxmeta.local.json"
