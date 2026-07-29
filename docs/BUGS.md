@@ -22,40 +22,69 @@ When Open issues is empty, contains only “None currently.”, or is sparse (ro
 
 ## Open issues
 
-### 1. Child order not preserved on Python full rebuild / import
+### 1. Live Sync Studio→folder meta path wrong for ModuleScript / LocalScript
+
+`Verde.metaRelPath` always appends `.robloxmeta.json` to the instance hierarchy path (`…/Name.robloxmeta.json`). Export, however, writes companion metas with the type stem so they sit next to the script file:
+
+- ModuleScript → `Name.module.robloxmeta.json` (next to `Name.module.lua`)
+- LocalScript → `Name.local.robloxmeta.json`
+- Script → `Name.robloxmeta.json`
+
+Studio→folder pushes therefore create a **second** meta file at the wrong path for ModuleScript/LocalScript. The bridge `/meta` lookup (disk→Studio) still finds the correct `*.module` / `*.local` companion when given the script path, so Source sync can work — but the tree accumulates dual metas, later `verde-import` may see both as candidates, and machine-local Referent / Tags / Attributes updates from Live Sync land on the wrong file.
+
+**Where**  
+`luau/Verde.luau` `metaRelPath`; consumers: plugin `pushInstanceToBridge`.
+
+**Impact**  
+Silent dual-meta pollution; Live Sync meta edits may not update the file import/export actually use; multi-machine VCS noise.
+
+### 2. Attributes encode can emit corrupt / lossy `AttributesSerialize`
+
+Two related encode defects in `python/attributes.py` `encode_attributes`:
+
+1. **Count / body desync on unknown structured types.** Entries whose `__type` is not in the known set (and does not start with `Unknown_`) still have their name written, then `continue` without a type_id/value — while the leading `u32` count still includes them. The resulting BinaryString is misaligned for every subsequent attribute.
+2. **Live Sync CFrame / EnumItem shape mismatch.** Luau `encodeValue` stores CFrame as `{ __type = "CFrame", components = {…} }` and EnumItem as `{ EnumType, Name }`. Python encode expects CFrame `{ Position, RotationId, Rotation? }` and EnumItem `{ EnumType, Value }`. Attributes that reach disk via Live Sync experimental property sync and are later rebuilt by `verde-import` / full rebuild therefore lose CFrame orientation (zeros) and EnumItem values (Value defaults to 0).
+
+**Impact**  
+Data loss / corrupt Attributes on encode paths that mix Live Sync meta with offline rebuild, or that carry hand-authored unknown `__type` markers.
+
+### 3. Child order not preserved on Python full rebuild / import
 
 `build.py` `process_directory` walks the filesystem with `sorted(iterdir())`. Roblox instance child order is therefore not restored on full rebuild. Differential import also leaves existing place children in their original order and does not re-order them to match the folder. Usually harmless for scripts, but prevents byte-identical round-trips and can affect order-sensitive behaviour (UI lists, some collection patterns).
 
 **Impact**  
 Non-identical rebuilds; rare behavioural differences for order-dependent instances.
 
-### 2. Attributes decode stops at first unknown type_id
+### 4. Attributes decode stops at first unknown type_id
 
 `attributes.decode_attributes` aborts the remaining attribute list as soon as it encounters an unrecognised type ID (it cannot safely skip a variable-length value). Later attributes in the same `AttributesSerialize` payload are therefore lost on extract. Encode also skips any `__type` that begins with `Unknown_`.
 
 **Impact**  
 Partial Attributes loss on places that use newer or rare attribute types; round-trip fidelity degrades for those instances.
 
-### 3. Root-level non-Item elements dropped on full rebuild
+### 5. Root-level non-Item elements dropped on full rebuild
 
 Full extract + build (and differential create paths) do not preserve top-level children of the `<roblox>` root other than `Item`s (`SharedStrings` table, `Meta`, `External*`, etc.). Tags that were SharedString references are re-emitted as BinaryString (so the common Tags case survives), but any other property that remains a SharedString md5 key, or any place that relies on the root SharedStrings table / Meta / External references, will lose those elements after a rebuild.
 
 **Impact**  
 Data loss / dangling references for places that use SharedString for non-Tags properties or that depend on root Meta/External. Full preservation is also tracked as APPROVED work in TODO_FEATURES; the current behaviour is still a correctness gap for those places.
 
-### 4. Live Sync “no matching script” noise after renames / stale Referent
+### 6. Live Sync “no matching script” noise after renames / stale Referent
 
 When a script is renamed in Studio or the on-disk meta still carries a stale Referent/UniqueId, the bridge path-matching falls back to name/path and reports “N file(s) had no matching script”. The count is surfaced (not silent), but large places accumulate noise and require a re-export or manual healing. Full Referent/UniqueId healing is tracked as I1 in TODO_FEATURES; until then this remains a residual robustness gap in the live path.
 
 **Impact**  
 Operational friction / status noise on Live Sync after renames; no automatic data loss, but users can miss real mismatches among the noise.
 
-### 5. Selective `--tag` keep-map residual risk for unknown Tags forms
+### 7. `import_rbxlx` still swallows `write_manifest` failures
 
-After the SharedString decode work, `_item_has_tag` and extract correctly populate `meta["Tags"]` for all currently supported forms. Selective export itself is correct. Residual observation: if a place ever stores Tags exclusively in a form the shared decoder does not yet recognise, the keep-map would still treat the instance as untagged. No additional forms are known today; this item exists so the decoder remains the single source of truth for any future Tags variants.
+At the end of a successful differential import, `build.import_rbxlx` refreshes `.verde/manifest.json` inside a bare `except Exception: pass`. Unlike the Live Sync bridge path (Previously corrected #21), a permission / disk / concurrent-access failure leaves the on-disk manifest stale with no diagnostic. Subsequent imports then re-treat clean files as dirty (or worse, re-skip creates incorrectly until `--force`).
+
+**Where**  
+`python/build.py` end of `import_rbxlx`.
 
 **Impact**  
-Future-proofing; no current incorrect behaviour observed.
+Silent robustness gap; dirty-tracking drift after import when the manifest write fails.
 
 ---
 
@@ -78,15 +107,20 @@ These behaviours are deliberate and should not be “fixed” without an explici
 - **mtime-win on import/merge**  
   Most-recent-wins is the documented offline conflict policy; not a defect.
 
+- **Live Sync non-goals**  
+  No auto-create/delete of instances from disk while Studio is open; scripts-only default watch; no user-facing port configuration.
+
 ---
 
 ## Remaining minor / edge-case notes
 
-- Full-rebuild child order (Open #1) is the only remaining order-related item; differential import intentionally does not reorder existing place children.
-- Bridge manifest write failures are now surfaced (Previously corrected #21).
+- Full-rebuild child order (Open #3) is the only remaining order-related item; differential import intentionally does not reorder existing place children.
+- Bridge manifest write failures are now surfaced (Previously corrected #21); **import** still silent (Open #7).
 - Shared uniqueness helper is now fully wired in both extract and build (Previously corrected #22).
-- Attributes unknown-type early-stop (Open #2) is the main residual Attributes edge case; known types round-trip fully.
+- Attributes unknown-type early-stop (Open #4) and encode fidelity (Open #2) are the main residual Attributes edge cases; known offline types round-trip fully when shapes match.
 - Interesting-properties extractor is now line-oriented inside the return table (Previously corrected #25).
+- Selective `--tag` keep-map: after SharedString decode work, `_item_has_tag` / extract correctly populate `meta["Tags"]` for all currently supported forms. No additional Tags wire forms are known; keep the shared decoder as the single source of truth if Studio ever adds one.
+- Differential import `_get_tags` does not pass a SharedStrings table. Places that still store Tags as SharedString hashes will look “dirty” once and be rewritten as BinaryString (self-healing; not data loss after the first write).
 
 ---
 
