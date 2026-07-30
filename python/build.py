@@ -99,12 +99,17 @@ from typing import Any
 from attributes import decode_attributes, encode_attributes_b64
 from features.meta import AI_NOTES_DIRNAME, is_under_ai_notes, load_meta_merged, walk_metas
 from xml_props import (
+    SCRIPT_EXTENSIONS,
     claim_unique_name,
     decode_tags_from_prop,
     parse_children,
     parse_property_element,
+    parse_script_filename,
     parse_shared_strings,
+    resolve_item_name,
     sanitize_name,
+    script_extension_for,
+    strip_script_type_stem,
 )
 
 
@@ -273,46 +278,34 @@ def process_directory(dir_path: Path, parent_element: ET.Element) -> None:
         if item.name == AI_NOTES_DIRNAME:
             continue
 
-        if item.is_file() and (
-            item.suffix == ".lua" or item.name.endswith((".local.lua", ".module.lua"))
-        ):
-            if item.name.endswith(".local.lua"):
-                class_name = "LocalScript"
-                fs_base = item.name[: -len(".local.lua")]
-            elif item.name.endswith(".module.lua"):
-                class_name = "ModuleScript"
-                fs_base = item.name[: -len(".module.lua")]
-            else:
-                class_name = "Script"
-                fs_base = item.stem
+        if item.is_file():
+            parsed = parse_script_filename(item.name)
+            if parsed is not None:
+                class_name, fs_base = parsed
+                meta = script_meta_for(item)
+                class_name = meta.get("ClassName", class_name)
+                xml_name = meta.get("Name", fs_base)
 
-            meta = script_meta_for(item)
-            class_name = meta.get("ClassName", class_name)
-            xml_name = meta.get("Name", fs_base)
+                item_elem = ET.SubElement(parent_element, "Item")
+                item_elem.set("class", class_name)
+                item_elem.set("name", xml_name)
+                if "Referent" in meta:
+                    item_elem.set("referent", str(meta["Referent"]))
 
-            item_elem = ET.SubElement(parent_element, "Item")
-            item_elem.set("class", class_name)
-            item_elem.set("name", xml_name)
-            if "Referent" in meta:
-                item_elem.set("referent", str(meta["Referent"]))
+                source = read_text(item)
+                add_properties(item_elem, meta, source=source)
 
-            source = read_text(item)
-            add_properties(item_elem, meta, source=source)
-
-            children_dir = item.parent / fs_base
-            if children_dir.is_dir() and children_dir != dir_path:
-                process_directory(children_dir, item_elem)
-            continue
+                children_dir = item.parent / fs_base
+                if children_dir.is_dir() and children_dir != dir_path:
+                    process_directory(children_dir, item_elem)
+                continue
 
         if not item.is_dir():
             continue
 
         base = item.name
-        if (
-            (item.parent / f"{base}.lua").is_file()
-            or (item.parent / f"{base}.local.lua").is_file()
-            or (item.parent / f"{base}.module.lua").is_file()
-        ):
+        # Skip companion dirs that already have a script sibling (handled above).
+        if any((item.parent / f"{base}{ext}").is_file() for ext in SCRIPT_EXTENSIONS):
             continue
 
         meta = load_meta(item)
@@ -352,18 +345,6 @@ def build_rbxlx(input_dir: str, output_rbxlx: str = "RebuiltPlace.rbxlx") -> Non
     print("You can now open this file in Roblox Studio.")
 
 
-def _resolve_item_name(item: ET.Element) -> str:
-    attr = item.get("name")
-    if attr:
-        return attr
-    props = item.find("Properties")
-    if props is not None:
-        for p in props:
-            if p.get("name") == "Name" and p.text:
-                return p.text
-    return "Unnamed"
-
-
 def _build_instance_maps(
     root: ET.Element,
 ) -> tuple[dict[str, ET.Element], dict[str, ET.Element], dict[ET.Element, ET.Element | None]]:
@@ -380,7 +361,7 @@ def _build_instance_maps(
         if item.tag != "Item":
             return
 
-        raw_name = _resolve_item_name(item)
+        raw_name = resolve_item_name(item)
         fs_base = sanitize_name(raw_name)
         parent_id = id(parent) if parent is not None else 0
         if parent_id not in taken:
@@ -562,7 +543,7 @@ def _needs_update(
 ) -> bool:
     if "ClassName" in meta and str(meta["ClassName"]) != (item.get("class") or ""):
         return True
-    if "Name" in meta and str(meta["Name"]) != _resolve_item_name(item):
+    if "Name" in meta and str(meta["Name"]) != resolve_item_name(item):
         return True
     if "Referent" in meta and str(meta["Referent"]) != (item.get("referent") or ""):
         return True
@@ -870,12 +851,7 @@ def import_rbxlx(
                     )
                 except ValueError:
                     pass
-            if base_for_script.endswith(".module"):
-                inst_name = base_for_script[: -len(".module")]
-            elif base_for_script.endswith(".local"):
-                inst_name = base_for_script[: -len(".local")]
-            else:
-                inst_name = base_for_script
+            inst_name = strip_script_type_stem(base_for_script)
             path_key = str((rel.parent / inst_name)).replace("\\", "/")
 
         candidates.append(
@@ -898,18 +874,10 @@ def import_rbxlx(
             continue
         if is_under_ai_notes(p, input_path):
             continue
-        name = p.name
-        if name.endswith(".local.lua"):
-            class_name = "LocalScript"
-            inst_name = name[: -len(".local.lua")]
-        elif name.endswith(".module.lua"):
-            class_name = "ModuleScript"
-            inst_name = name[: -len(".module.lua")]
-        elif name.endswith(".lua"):
-            class_name = "Script"
-            inst_name = name[: -len(".lua")]
-        else:
+        parsed = parse_script_filename(p.name)
+        if parsed is None:
             continue
+        class_name, inst_name = parsed
         companion = p.parent / f"{p.stem}.robloxmeta.json"
         if companion.is_file():
             continue
