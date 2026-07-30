@@ -50,16 +50,6 @@ When a script is renamed in Studio or the on-disk meta still carries a stale Ref
 **Impact**  
 Operational friction / status noise on Live Sync after renames; no automatic data loss, but users can miss real mismatches among the noise.
 
-### 5. `import_rbxlx` still swallows `write_manifest` failures
-
-At the end of a successful differential import, `build.import_rbxlx` refreshes `.verde/manifest.json` inside a bare `except Exception: pass`. Unlike the Live Sync bridge path (Previously corrected #21), a permission / disk / concurrent-access failure leaves the on-disk manifest stale with no diagnostic. Subsequent imports then re-treat clean files as dirty (or worse, re-skip creates incorrectly until `--force`).
-
-**Where**  
-`python/build.py` end of `import_rbxlx`.
-
-**Impact**  
-Silent robustness gap; dirty-tracking drift after import when the manifest write fails.
-
 ---
 
 ## Intentional design (not bugs)
@@ -89,7 +79,7 @@ These behaviours are deliberate and should not be “fixed” without an explici
 ## Remaining minor / edge-case notes
 
 - Full-rebuild child order (Open #1) is the only remaining order-related item; differential import intentionally does not reorder existing place children.
-- Bridge manifest write failures are now surfaced (Previously corrected #21); **import** still silent (Open #5).
+- Bridge and import `write_manifest` failures are now both surfaced (Previously corrected #21 and #28).
 - Shared uniqueness helper is now fully wired in both extract and build (Previously corrected #22).
 - Attributes unknown-type early-stop (Open #2) remains the main residual Attributes edge case; encode now filters unknown structured types cleanly and accepts Luau CFrame/EnumItem shapes (Previously corrected #27).
 - Interesting-properties extractor is now line-oriented inside the return table (Previously corrected #25).
@@ -130,6 +120,7 @@ These correctness problems were fixed during development and are no longer prese
 25. Fragile `interesting.py` property-name extraction. The interesting-properties list is now extracted with a line-oriented scan of the `return { ... }` table (comments stripped; only standalone double-quoted table rows collected). Falls back to the previous whole-file regex only if the structured pass yields nothing. Stops incidental double-quoted strings from polluting the set. (this PR)
 26. Live Sync Studio→folder meta path for ModuleScript / LocalScript. `Verde.metaRelPath` previously always appended bare `.robloxmeta.json` for any LuaSourceContainer, creating a second meta file at the wrong path while export writes `Name.module.robloxmeta.json` / `Name.local.robloxmeta.json`. Fixed so metaRelPath mirrors scriptRelPath type stems. (this PR)
 27. Attributes encode no longer produces a count/body desync on unknown structured `__type` values (those entries are filtered before the leading u32 count is written). Encode also accepts Live Sync Luau shapes for CFrame (`components` list → RotationId=0 + matrix) and EnumItem (`Name` present; `Value` defaults to 0). (this PR)
+28. `import_rbxlx` no longer swallows `write_manifest` failures. The bare `except Exception: pass` at the end of a successful differential import is replaced with a diagnostic print (same style as the Live Sync bridge path). A permission / disk / concurrent-access failure is now visible while the import itself still succeeds.
 
 ---
 
