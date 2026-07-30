@@ -57,6 +57,9 @@ Applies an extracted folder tree back into an existing `.rbxlx` (or creates a ne
 **`--force`**  
 Bypasses the clean-manifest / mtime-win skip logic. Every matching folder entry is considered for application even when the on-disk file is older than the target `.rbxlx` or matches the recorded hash+mtime. Content is still only written when `_needs_update` detects a real difference. Manifest is refreshed after a successful run.
 
+**`--scripts-only`**  
+Only consider Script / LocalScript / ModuleScript candidates (or bare scripts that carry Source). Non-script metas and folders are skipped. Forces the scripts-only prune safety gate so non-script place content is never removed by pure leftover pruning. Symmetric to the scripts-only default of `verde-export`; useful when the extracted tree was produced with `--all` but only scripts should be pushed back.
+
 **Key components**  
 - `python/build.py`
 - `python/features/sync.py` (manifest helpers, mtime-win)
