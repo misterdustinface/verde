@@ -50,6 +50,23 @@ When a script is renamed in Studio or the on-disk meta still carries a stale Ref
 **Impact**  
 Operational friction / status noise on Live Sync after renames; no automatic data loss, but users can miss real mismatches among the noise.
 
+### 5. Differential import `_get_tags` does not resolve SharedString Tags
+
+`build._get_tags` calls `decode_tags_from_prop(p)` with no `shared_strings` map. When a place still stores Tags as SharedString (md5 key referencing the root `<SharedStrings>` table), the decoder returns `[]` for the unknown key. Meta (from extract) holds the real tag list, so `_needs_update` always reports a Tags mismatch. Every such instance is rewritten to BinaryString on the first import (self-healing thereafter).
+
+**Where**  
+`python/build.py` `_get_tags` / `_needs_update`; root SharedStrings table is never passed on the import path.
+
+**Impact**  
+Unnecessary “dirty” status and write noise on first import of SharedString-Tags places; no permanent data loss after the rewrite.
+
+### 6. build.py `_resolve_item_name` remains attribute-first
+
+Extract prefers the Name *property* (Studio source of truth) and falls back to the Item@name attribute. Import’s `_resolve_item_name` (and therefore path_map construction) still prefers the attribute first. When the two diverge (attribute lags or is absent), hierarchy path keys can mismatch and differential updates can be skipped or mis-routed. Open PR #48 is unifying both sides on a shared property-preferring `resolve_item_name`; residual until that lands.
+
+**Impact**  
+Potential silent skip of updates or path-map drift on places where Item@name and Name property disagree.
+
 ---
 
 ## Intentional design (not bugs)
@@ -84,8 +101,9 @@ These behaviours are deliberate and should not be “fixed” without an explici
 - Attributes unknown-type early-stop (Open #2) remains the main residual Attributes edge case; encode now filters unknown structured types cleanly and accepts Luau CFrame/EnumItem shapes (Previously corrected #27).
 - Interesting-properties extractor is now line-oriented inside the return table (Previously corrected #25).
 - Selective `--tag` keep-map: after SharedString decode work, `_item_has_tag` / extract correctly populate `meta["Tags"]` for all currently supported forms. No additional Tags wire forms are known; keep the shared decoder as the single source of truth if Studio ever adds one.
-- Differential import `_get_tags` does not pass a SharedStrings table. Places that still store Tags as SharedString hashes will look “dirty” once and be rewritten as BinaryString (self-healing; not data loss after the first write).
+- Differential import `_get_tags` SharedString gap elevated to Open #5.
 - Live Sync metaRelPath now uses the correct type stem for ModuleScript / LocalScript (Previously corrected #26).
+- Name-resolution divergence (attr-first vs property-first) elevated to Open #6; open refactor PR #48 is addressing the shared helper + wiring.
 
 ---
 
