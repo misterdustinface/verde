@@ -44,9 +44,13 @@ After create/update, high-confidence renames and unmatched leftovers are handled
   Pass --no-delete to report only.
 
 Scripts-only safety: when every candidate in the run is a Script / LocalScript /
-ModuleScript, pure prune is limited to those ClassNames so a normal scripts-only
-import does not wipe non-script content. High-confidence renames still apply to
-any ClassName.
+ModuleScript (or when --scripts-only is passed), pure prune is limited to those
+ClassNames so a normal scripts-only import does not wipe non-script content.
+High-confidence renames still apply to any ClassName.
+
+--scripts-only forces consideration of only script candidates and the scripts-only
+prune safety. Useful when the extracted tree was produced with --all but only
+scripts should be pushed back into the place.
 
 When a .verde/manifest.json is present, files whose simple numeric hash + mtime
 match the recorded entry are skipped for writing *only when the place still has
@@ -765,6 +769,7 @@ def import_rbxlx(
     preserve_content: bool = False,
     no_rename: bool = False,
     no_delete: bool = False,
+    scripts_only: bool = False,
 ) -> None:
     input_path = Path(extracted_dir)
     if not input_path.is_dir():
@@ -785,6 +790,8 @@ def import_rbxlx(
         print("  (--no-rename: high-confidence renames will only be reported)")
     if no_delete:
         print("  (--no-delete: unmatched leftovers will only be reported)")
+    if scripts_only:
+        print("  (--scripts-only: only Script/LocalScript/ModuleScript candidates; prune safety forced)")
 
     manifest = None
     rbxlx_mtime = None
@@ -958,18 +965,34 @@ def import_rbxlx(
 
     kept.sort(key=lambda c: c["path_key"].count("/"))
 
+    # Optional --scripts-only filter: drop non-script candidates before
+    # extract_parents / scripts_only_run detection so prune safety is correct.
+    if scripts_only:
+        before = len(kept)
+        kept = [
+            c
+            for c in kept
+            if str((c["meta"] or {}).get("ClassName") or "") in _SCRIPT_CLASSES
+            or c.get("source") is not None
+        ]
+        skipped_ns = before - len(kept)
+        if skipped_ns:
+            print(f"  · skipped {skipped_ns} non-script candidate(s) (--scripts-only)")
+
     # Parents that appear in the folder extract — pure prune is scoped to these.
     extract_parents = _candidate_parent_set({c["path_key"] for c in kept})
 
     scripts_only_run = True
-    for c in kept:
-        cls = str((c["meta"] or {}).get("ClassName") or "")
-        if cls and cls not in _SCRIPT_CLASSES:
-            scripts_only_run = False
-            break
-        if not cls and c.get("source") is None:
-            scripts_only_run = False
-            break
+    if not scripts_only:
+        for c in kept:
+            cls = str((c["meta"] or {}).get("ClassName") or "")
+            if cls and cls not in _SCRIPT_CLASSES:
+                scripts_only_run = False
+                break
+            if not cls and c.get("source") is None:
+                scripts_only_run = False
+                break
+    # else: --scripts-only already forced scripts_only_run = True
 
     # --- Apply kept candidates ---
     updated = 0
@@ -1192,7 +1215,8 @@ def main() -> None:
             "are removed by default. Pass --no-rename / --no-delete to report only. "
             "Clean (unchanged) disk entries still mark their place match so they are "
             "never false leftovers. "
-            "Scripts-only runs still protect non-script place content on pure prune. "
+            "Scripts-only runs (auto-detected or via --scripts-only) still protect "
+            "non-script place content on pure prune. "
             "Referent is read from machine-local *.robloxmeta.local.json when present. "
             "The top-level .ai/ AI agent notes directory is never imported."
         )
@@ -1241,6 +1265,16 @@ def main() -> None:
             "them. By default (without this flag) leftovers are removed."
         ),
     )
+    parser.add_argument(
+        "--scripts-only",
+        action="store_true",
+        help=(
+            "Only consider Script / LocalScript / ModuleScript candidates from the "
+            "folder (ignore non-script metas and folders). Also forces the scripts-only "
+            "prune safety so non-script place content is never removed. Useful when the "
+            "extracted tree was produced with --all but you only want to push scripts."
+        ),
+    )
     args = parser.parse_args()
     import_rbxlx(
         args.extracted_dir,
@@ -1249,6 +1283,7 @@ def main() -> None:
         preserve_content=args.preserve_content,
         no_rename=args.no_rename,
         no_delete=args.no_delete,
+        scripts_only=args.scripts_only,
     )
 
 
