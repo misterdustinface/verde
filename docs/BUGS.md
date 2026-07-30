@@ -87,7 +87,8 @@ These behaviours are deliberate and should not be “fixed” without an explici
 - Differential import `_get_tags` SharedString gap fixed (Previously corrected #29); the import path now passes the root SharedStrings table.
 - Live Sync metaRelPath now uses the correct type stem for ModuleScript / LocalScript (Previously corrected #26).
 - Name-resolution / script-extension helpers are now fully shared and wired in both extract and build (Previously corrected #30). Path maps stay aligned on the property-preferring resolver.
-- **2026-07-30 github-inspect residual scan:** Thorough re-scan of residual notes + extract.py / build.py / attributes.py / bridge.py / Luau Verde.luau / plugin / xml_props.py / tests confirmed no additional elevatable true defects beyond the existing Open 1–4. Silent-exception paths, path collisions, encoding edge cases, and Live Sync status paths are already addressed or intentionally scoped. Open issues count remains 4 (borderline sparse but accurate after exhaustive residual check).
+- **2026-07-30 github-inspect residual scan (iterate):** Thorough re-scan of residual notes + extract.py / build.py / attributes.py / bridge.py / Luau Verde.luau / plugin / xml_props.py / tests confirmed no additional elevatable true defects beyond the existing Open 1–4. Silent-exception paths, path collisions, encoding edge cases, and Live Sync status paths are already addressed or intentionally scoped. Open issues count remains 4 (borderline sparse but accurate after exhaustive residual check).
+- **2026-07-30 github-inspect residual scan (this run):** Re-confirmed Open 1–4 by fresh code review of extract.py, build.py (sorted(iterdir) child order), attributes.py (unknown type_id early stop), bridge.py, Verde.luau, and VerdePlugin.server.luau. No open PRs; no new TODO/FIXME/HACK markers; Not-bugs / Intentional design section honored. No additional elevatable defects found. Open remains 1–4.
 
 ---
 
