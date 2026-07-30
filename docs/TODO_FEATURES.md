@@ -142,6 +142,28 @@ Today’s mtime-win silently prefers one side when both the folder and the `.rbx
 **Rough idea**  
 When `verde-merge` (or a forced import) detects that a tracked file is dirty on both sides relative to the last manifest, write a sibling `*.conflict` (or annotate the Source / meta with classic <<<< / ==== / >>>> markers) and exit non-zero. Add optional `--prefer-folder` / `--prefer-place` to auto-resolve in one direction. Keep the current pure mtime-win behaviour as the default for non-interactive scripts.
 
+### I3. Plugin-side Source diff preview before applying Live Sync changes
+
+**Why**  
+When Studio→folder or folder→Studio would overwrite a script Source that the other side also modified, artists currently get no visual cue of the delta. A lightweight inline diff in the plugin panel would let them accept, reject, or open the full editor before the write lands, reducing accidental overwrites during concurrent editing.
+
+**Rough idea**  
+- On detecting a content mismatch during Live Sync apply (already computed for dirty checks), send a short unified-diff or side-by-side snippet over the existing HTTP endpoints.
+- Plugin renders a scrollable “Pending change” card with Accept / Discard / Open in Script Editor buttons.
+- Keep scope scripts-only; no full DataModel property diffs. Re-use ChangeHistoryService for the Studio side.
+- Optional config: “auto-accept when only whitespace” or “always prompt”.
+
+### I4. Automatic UniqueId / Referent backfill for AI-generated or newly created scripts on import
+
+**Why**  
+AI agents and manual “new script” folders often produce bare `.lua` files without companion meta or UniqueId. Differential import currently creates them as Folders/Instances but the resulting UniqueIds are Studio-generated and not written back to disk, so subsequent Live Sync or re-exports start with noisy “no matching” reports until a full re-export. Backfill would close the loop for agentic workflows.
+
+**Rough idea**  
+- After a successful create-graft in import (or on Live Sync first connect for unmatched new scripts), ask Studio (via bridge or post-import) for the new UniqueId and write it into the on-disk `.robloxmeta.json` (or local sibling).
+- Optional `--assign-ids` flag on `verde-import`.
+- Never overwrite an existing UniqueId; only fill missing ones.
+- Aligns with the healing idea in I1 but focused on the create path.
+
 ### SIMPLISTIC
 
 ### S1. Machine-readable `--json` output for `verde-search`, `verde-tags`, and `verde-set`/`verde-replace`
@@ -176,6 +198,36 @@ Default summary lines are good for interactive use; scripts and large places ben
 - Verbose: list every path that was (or would be) applied.
 - Quiet: suppress the “Applied N …” / “Nothing to merge” banners; still emit real errors on stderr.
 - Minimal changes to the existing print sites in `build.py` and `features/sync.py`.
+
+### S4. `verde-export --dry-run` that reports what would be written / overwritten / pruned
+
+**Why**  
+Symmetric with import/merge dry-run. Large places benefit from previewing the keep-map, selective filters, and which existing files would be touched before any disk writes.
+
+**Scope**  
+- Add `--dry-run` to `extract.main`.
+- Walk the hierarchy (or selective), print the planned filesystem paths + action (create / overwrite / skip-identical / prune), then exit without writing.
+- Minimal change to the existing progress / path-reuse logic; re-uses the same keep-map and uniqueness helpers.
+
+### S5. Plugin status-line “last bridge event” timestamp + one-click “Force full resync”
+
+**Why**  
+Artists currently have only the Live Sync toggle; when the bridge briefly disconnects or a rename leaves residual noise, there is no obvious recovery button short of toggling off/on. A small status affordance makes the system feel more reliable.
+
+**Scope**  
+- Extend the existing plugin status line with the timestamp of the last successful /push or /pull.
+- Add a “Resync now” button that triggers the same full scan-and-sync already performed on toggle ON.
+- Pure UI + existing bridge endpoints; no new Python surface.
+
+### S6. `verde-search --limit N` and matching plugin result cap
+
+**Why**  
+Huge places can produce thousands of matches; the current unbounded list is hard to scan and can freeze the plugin output. A soft limit keeps interactive use snappy.
+
+**Scope**  
+- CLI: `--limit` (default unlimited or a high soft default such as 500) truncates the printed list with a “… and N more” note.
+- Plugin: same cap on the status / results area, with a “Show all” affordance that re-runs unbounded.
+- Trivial change to the print / list loops in `features/search.py` and the plugin result renderer.
 
 ---
 
