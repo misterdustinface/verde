@@ -435,6 +435,19 @@ function Verde.scriptRelPath(inst: LuaSourceContainer): string
 end
 
 function Verde.metaRelPath(inst: Instance): string
+	-- Must match the on-disk companion layout produced by export:
+	--   ModuleScript → Name.module.robloxmeta.json (next to Name.module.lua)
+	--   LocalScript  → Name.local.robloxmeta.json
+	--   Script       → Name.robloxmeta.json
+	--   non-scripts  → Name/.robloxmeta.json
+	-- Previously always appended bare ".robloxmeta.json" for any LuaSourceContainer,
+	-- which created a second meta file and left Live Sync meta edits on the wrong path.
+	if inst:IsA("LocalScript") then
+		return Verde.instanceToRelPath(inst) .. ".local.robloxmeta.json"
+	end
+	if inst:IsA("ModuleScript") then
+		return Verde.instanceToRelPath(inst) .. ".module.robloxmeta.json"
+	end
 	if inst:IsA("LuaSourceContainer") then
 		return Verde.instanceToRelPath(inst) .. ".robloxmeta.json"
 	end
