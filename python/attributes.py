@@ -340,6 +340,28 @@ def _encode_color3(buf: bytearray, value: dict[str, Any]) -> None:
 
 
 def _encode_cframe(buf: bytearray, value: dict[str, Any]) -> None:
+    """Encode CFrame from either native or Live Sync (Luau) shape.
+
+    Native (decode output):
+      {Position: {X,Y,Z}, RotationId: int, Rotation?: [9 floats]}
+    Luau encodeValue (Live Sync experimental property sync):
+      {components: [x,y,z, r00..r22]}  — 12 floats, treated as RotationId=0
+    """
+    components = value.get("components")
+    if isinstance(components, (list, tuple)) and len(components) >= 12:
+        # Luau shape → full matrix form
+        pos = {
+            "X": float(components[0]),
+            "Y": float(components[1]),
+            "Z": float(components[2]),
+        }
+        matrix = [float(v) for v in components[3:12]]
+        _encode_vector3(buf, pos)
+        _write_u8(buf, 0)  # RotationId = 0 → arbitrary matrix follows
+        for v in matrix:
+            _write_f32(buf, v)
+        return
+
     pos = value.get("Position") or {}
     _encode_vector3(buf, pos if isinstance(pos, dict) else {})
     rot_id = int(value.get("RotationId", 0))
@@ -376,6 +398,24 @@ def _encode_font(buf: bytearray, value: dict[str, Any]) -> None:
     _write_string(buf, str(value.get("CachedFaceId", "")))
 
 
+# Known structured __type values that have an encoder path.
+_KNOWN_STRUCTURED = frozenset({
+    "UDim", "UDim2", "BrickColor", "Color3", "Vector2", "Vector3",
+    "CFrame", "EnumItem", "NumberSequence", "ColorSequence",
+    "NumberRange", "Rect", "Font",
+})
+
+
+def _is_encodable(value: Any) -> bool:
+    """True if this attribute value can be written without leaving a hole."""
+    if isinstance(value, dict) and "__type" in value:
+        t = str(value.get("__type", ""))
+        if t.startswith("Unknown_"):
+            return False
+        return t in _KNOWN_STRUCTURED
+    return isinstance(value, (bool, int, float, str))
+
+
 # ---------------------------------------------------------------------------
 # Encode
 # ---------------------------------------------------------------------------
@@ -384,19 +424,24 @@ def encode_attributes(attrs: dict[str, Any] | None) -> bytes:
     """
     Encode a meta["Attributes"] dict back into the binary form
     that Roblox expects for AttributesSerialize.
+
+    Only entries that have a known encoder path are counted and written.
+    Unknown structured types and Unknown_* markers are skipped entirely so
+    the leading u32 count always matches the body (no desync / misalignment).
+
+    Accepts both native shapes (from decode) and Live Sync Luau shapes for
+    CFrame (components list) and EnumItem (Name instead of / in addition to Value).
     """
     if not attrs:
         return b""
 
-    buf = bytearray()
-    # We may skip some entries (unknown types); count is written at the end
+    # Filter first so the count is exact — never write a name without a value.
     entries: list[tuple[str, Any]] = []
-
     for name, value in attrs.items():
-        if isinstance(value, dict) and str(value.get("__type", "")).startswith("Unknown_"):
-            continue  # cannot re-encode unknown types safely
-        entries.append((str(name), value))
+        if _is_encodable(value):
+            entries.append((str(name), value))
 
+    buf = bytearray()
     _write_u32(buf, len(entries))
 
     for name, value in entries:
@@ -429,6 +474,8 @@ def encode_attributes(attrs: dict[str, Any] | None) -> bytes:
             elif t == "EnumItem":
                 _write_u8(buf, 21)
                 _write_string(buf, str(value.get("EnumType", "")))
+                # Luau shape carries Name; native shape carries Value (u32).
+                # Binary format only has the numeric Value — default 0 when absent.
                 _write_u32(buf, int(value.get("Value", 0)))
             elif t == "NumberSequence":
                 _write_u8(buf, 23)
@@ -447,9 +494,7 @@ def encode_attributes(attrs: dict[str, Any] | None) -> bytes:
             elif t == "Font":
                 _write_u8(buf, 33)
                 _encode_font(buf, value)
-            else:
-                # Unknown structured type – skip
-                continue
+            # All other structured types were filtered by _is_encodable
         elif isinstance(value, bool):
             _write_u8(buf, 3)
             _write_u8(buf, 1 if value else 0)
@@ -464,7 +509,7 @@ def encode_attributes(attrs: dict[str, Any] | None) -> bytes:
             _write_u8(buf, 2)
             _write_string(buf, value)
         else:
-            # Fallback: stringify
+            # Fallback: stringify (should be unreachable after _is_encodable)
             _write_u8(buf, 2)
             _write_string(buf, str(value))
 
