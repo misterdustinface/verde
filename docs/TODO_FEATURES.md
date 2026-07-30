@@ -164,6 +164,18 @@ AI agents and manual “new script” folders often produce bare `.lua` files wi
 - Never overwrite an existing UniqueId; only fill missing ones.
 - Aligns with the healing idea in I1 but focused on the create path.
 
+### I5. Scoped Live Sync (tag or path-limited watch)
+
+**Why**  
+Full scripts-only Live Sync on a large place still walks and maps every script. Artists iterating on a single system (a UI pack, a combat module, a tagged “FeatureX”) want the bridge and watcher focused so rename noise and scan time stay proportional to the work in progress.
+
+**Rough idea**  
+- Plugin panel gains an optional Scope text field (accepts a dot-path or a tag name, same semantics as `verde-export --root` / `--tag`).
+- On Live Sync enable, the UniqueId/Referent map and disk watcher are limited to the scoped subtree (or tagged instances + ancestors).
+- Empty scope = current full scripts-only behaviour.
+- Re-use the existing keep-map / partial.json helpers and the bridge’s current map-building path; no new long-lived state.
+- Stay inside non-goals (no auto-create/delete, scripts-first).
+
 ### SIMPLISTIC
 
 ### S1. Machine-readable `--json` output for `verde-search`, `verde-tags`, and `verde-set`/`verde-replace`
@@ -228,6 +240,16 @@ Huge places can produce thousands of matches; the current unbounded list is hard
 - CLI: `--limit` (default unlimited or a high soft default such as 500) truncates the printed list with a “… and N more” note.
 - Plugin: same cap on the status / results area, with a “Show all” affordance that re-runs unbounded.
 - Trivial change to the print / list loops in `features/search.py` and the plugin result renderer.
+
+### S7. `verde-status --root` / `--tag` for partial dirty reports
+
+**Why**  
+When a selective extract is active (`.verde/partial.json` present), a full status list still reports every tracked file. Restricting the dirty/clean report to the same root or tag keeps status output useful for the current work focus and matches the selective export surface.
+
+**Scope**  
+- Accept the same `--root` / `--tag` flags already used by export.
+- Filter the manifest walk (and any bridge probe) to the corresponding paths.
+- Zero change when flags are absent. Minimal addition to `features/status.py` and the shared keep-map helpers.
 
 ---
 
