@@ -7,24 +7,9 @@ Pure defects remain in `BUGS.md`.
 
 ## APPROVED
 
-Ordered per operator preference. (Items 1–2 from the previous list shipped; remaining renumbered.)
+Ordered per operator preference. (Item 1 residual shipped; remaining renumbered.)
 
-### 1. Selective extract / partial rebuild
-
-**Description**  
-Extract or rebuild only a subtree (e.g. everything under `ServerScriptService` or a single tagged model) instead of the whole place.
-
-**Shipped (export foundation)**  
-- `verde-export --root PATH` and `--tag TAG` on the export path.
-- `.verde/partial.json` records the filter.
-
-**Still open**  
-- Import-side grafting of a partial tree back into an existing `.rbxlx` (or previously extracted full tree) using the partial manifest.
-- Optional `--root` / `--tag` on `verde-import` / `verde-merge`.
-
----
-
-### 2. Preserve root-level Meta / External / SharedStrings
+### 1. Preserve root-level Meta / External / SharedStrings
 
 **Description**  
 Some `.rbxlx` files contain top-level elements outside the main `Item` tree (`Meta`, `External`, `ExternalAssets`, `SharedStrings`, etc.). These are currently dropped on extract/build.
@@ -37,7 +22,7 @@ Some `.rbxlx` files contain top-level elements outside the main `Item` tree (`Me
 
 ---
 
-### 3. Richer property round-tripping for complex / rare types
+### 2. Richer property round-tripping for complex / rare types
 
 **Description**  
 Improve fidelity for property types that currently lose information or are only partially reconstructed (NumberSequence / ColorSequence keypoints, PhysicalProperties, FontFace, Content, SharedString references, Attributes, etc.).
@@ -51,7 +36,7 @@ Improve fidelity for property types that currently lose information or are only 
 
 ---
 
-### 4. Plugin: persist last search filters
+### 3. Plugin: persist last search filters
 
 **Description**  
 Remember the most recent ClassName / Name / Tag / Property filters in the Studio plugin so users do not have to re-type them every session.
@@ -64,7 +49,7 @@ Remember the most recent ClassName / Name / Tag / Property filters in the Studio
 
 ---
 
-### 5. Streaming search / replace on live `.rbxlx`
+### 4. Streaming search / replace on live `.rbxlx`
 
 **Description**  
 Operate on a `.rbxlx` file in place (or via a temporary copy) without a full extract → edit → rebuild cycle. Useful for large places where disk I/O and intermediate folder trees are expensive.
@@ -77,7 +62,7 @@ Operate on a `.rbxlx` file in place (or via a temporary copy) without a full ext
 
 ---
 
-### 6. Live Sync with open Studio (CLI: `verde-sync`)
+### 5. Live Sync with open Studio (CLI: `verde-sync`)
 
 **Description**  
 Bi-directional event-driven sync between an extracted folder and an **open** Studio place (scripts-first).
@@ -103,7 +88,7 @@ Bi-directional event-driven sync between an extracted folder and an **open** Stu
 
 ---
 
-### 7. Plugin hierarchy navigator + recent-sync timeline
+### 6. Plugin hierarchy navigator + recent-sync timeline
 
 **Description**  
 Artists and designers currently context-switch between the extracted folder on disk and the Studio DataModel. A lightweight, scripts-first hierarchy view inside the existing Verde plugin panel, plus a short list of the most recent bridge events, would make Live Sync feel trustworthy and reduce the need to leave Studio to confirm what just happened.

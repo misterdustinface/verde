@@ -60,6 +60,9 @@ Bypasses the clean-manifest / mtime-win skip logic. Every matching folder entry 
 **`--scripts-only`**  
 Only consider Script / LocalScript / ModuleScript candidates (or bare scripts that carry Source). Non-script metas and folders are skipped. Forces the scripts-only prune safety gate so non-script place content is never removed by pure leftover pruning. Symmetric to the scripts-only default of `verde-export`; useful when the extracted tree was produced with `--all` but only scripts should be pushed back.
 
+**Selective import / partial grafting**  
+`--root PATH` and `--tag TAG` (same semantics as export) filter which candidates are applied. When a selective export wrote `.verde/partial.json`, import automatically loads it: the recorded `scripts_only` forces prune safety, and the recorded root/tag are used when CLI flags are absent. Path prefix uses the same `sanitize_name` rules as extract so matching stays consistent. Tag filter keeps tagged instances plus their ancestors so hierarchy can still be grafted. `extract_parents` and scripts-only prune safety are recomputed against the filtered set; content outside the selective scope is never touched. Because selective export already mirrors hierarchy (the selected root becomes the top of the folder tree), path-based grafting into an existing place works without extra rewriting.
+
 **Key components**  
 - `python/build.py`
 - `python/features/sync.py` (manifest helpers, mtime-win)
@@ -151,13 +154,14 @@ Read-only command that answers “which files are dirty?” and “is the Live S
 **Key components**  
 - `python/features/status.py` (`verde-status`)
 
-### 13. Selective / partial extract (`--root` / `--tag`)
+### 13. Selective / partial extract + import grafting (`--root` / `--tag`)
 
 **Description**  
-Foundation for partial place exports. `--root PATH` limits the export to a named subtree; `--tag TAG` keeps tagged instances and their ancestor chain. Writes `.verde/partial.json` so a future import can graft the partial tree back. Import-side grafting is still residual work (see TODO).
+Foundation for partial place exports and imports. `--root PATH` limits the export to a named subtree; `--tag TAG` keeps tagged instances and their ancestor chain. Writes `.verde/partial.json` so import can read the filter. On import, `--root` / `--tag` (or the partial manifest) filter candidates; prune and scripts-only safety are recomputed against the filtered set. Hierarchy mirroring from selective export makes path-based grafting into an existing place correct without extra rewriting.
 
 **Key components**  
 - `python/extract.py`
+- `python/build.py` (selective filters + partial.json load)
 
 ### 14. Interactive case disambiguation for set/replace and tags
 
