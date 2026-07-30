@@ -52,6 +52,15 @@ High-confidence renames still apply to any ClassName.
 prune safety. Useful when the extracted tree was produced with --all but only
 scripts should be pushed back into the place.
 
+Selective import (--root / --tag, or automatic from .verde/partial.json written
+by a selective export):
+- Only candidates under the given root path (or carrying the given tag, plus
+  ancestors) are considered.
+- Prune and scripts-only safety are recomputed against the filtered set so
+  content outside the selective scope is never touched.
+- Hierarchy mirroring from selective export already makes path-based grafting
+  correct; the partial manifest and CLI flags make the scope explicit.
+
 When a .verde/manifest.json is present, files whose simple numeric hash + mtime
 match the recorded entry are skipped for writing *only when the place still has
 the match* (and mtime-wins is applied against the .rbxlx). After a successful
@@ -770,6 +779,8 @@ def import_rbxlx(
     no_rename: bool = False,
     no_delete: bool = False,
     scripts_only: bool = False,
+    root_filter: str | None = None,
+    tag_filter: str | None = None,
 ) -> None:
     input_path = Path(extracted_dir)
     if not input_path.is_dir():
@@ -792,6 +803,28 @@ def import_rbxlx(
         print("  (--no-delete: unmatched leftovers will only be reported)")
     if scripts_only:
         print("  (--scripts-only: only Script/LocalScript/ModuleScript candidates; prune safety forced)")
+
+    # Load selective partial manifest if present (written by verde-export --root/--tag).
+    partial: dict[str, Any] | None = None
+    partial_path = input_path / ".verde" / "partial.json"
+    if partial_path.is_file():
+        try:
+            partial = json.loads(partial_path.read_text(encoding="utf-8"))
+            if not isinstance(partial, dict):
+                partial = None
+        except Exception:
+            partial = None
+
+    effective_root = root_filter or (partial.get("root") if partial else None)
+    effective_tag = tag_filter or (partial.get("tag") if partial else None)
+    if partial and partial.get("scripts_only") and not scripts_only:
+        scripts_only = True
+        print("  (partial.json: scripts_only → prune safety forced)")
+
+    if effective_root:
+        print(f"  Selective root: {effective_root}")
+    if effective_tag:
+        print(f"  Selective tag: {effective_tag}")
 
     manifest = None
     rbxlx_mtime = None
@@ -978,6 +1011,45 @@ def import_rbxlx(
         skipped_ns = before - len(kept)
         if skipped_ns:
             print(f"  · skipped {skipped_ns} non-script candidate(s) (--scripts-only)")
+
+    # Selective filters (CLI --root/--tag or from partial.json).
+    if effective_root or effective_tag:
+        before = len(kept)
+        if effective_root:
+            parts = [sanitize_name(p) for p in str(effective_root).split(".") if p]
+            prefix = "/".join(parts)
+
+            def _under_root(c: dict[str, Any]) -> bool:
+                pk = c.get("path_key") or ""
+                return pk == prefix or pk.startswith(prefix + "/")
+
+            kept = [c for c in kept if _under_root(c)]
+        if effective_tag:
+            tag_l = str(effective_tag).lower()
+
+            def _has_tag(c: dict[str, Any]) -> bool:
+                tags = (c.get("meta") or {}).get("Tags") or []
+                if isinstance(tags, str):
+                    tags = [tags] if tags else []
+                return any(str(t).lower() == tag_l for t in tags)
+
+            # Keep tagged instances and any ancestors already present so
+            # hierarchy can still be grafted.
+            tagged_paths = {c["path_key"] for c in kept if _has_tag(c)}
+
+            def _is_ancestor_or_tagged(c: dict[str, Any]) -> bool:
+                pk = c.get("path_key") or ""
+                if pk in tagged_paths:
+                    return True
+                for tp in tagged_paths:
+                    if tp.startswith(pk + "/") or pk == "":
+                        return True
+                return False
+
+            kept = [c for c in kept if _is_ancestor_or_tagged(c)]
+        skipped_sel = before - len(kept)
+        if skipped_sel:
+            print(f"  · skipped {skipped_sel} candidate(s) outside selective filter")
 
     # Parents that appear in the folder extract — pure prune is scoped to these.
     extract_parents = _candidate_parent_set({c["path_key"] for c in kept})
@@ -1217,6 +1289,8 @@ def main() -> None:
             "never false leftovers. "
             "Scripts-only runs (auto-detected or via --scripts-only) still protect "
             "non-script place content on pure prune. "
+            "Selective: --root / --tag (or .verde/partial.json from a selective export) "
+            "limit which candidates are applied; prune stays scoped to the filter. "
             "Referent is read from machine-local *.robloxmeta.local.json when present. "
             "The top-level .ai/ AI agent notes directory is never imported."
         )
@@ -1275,6 +1349,23 @@ def main() -> None:
             "extracted tree was produced with --all but you only want to push scripts."
         ),
     )
+    parser.add_argument(
+        "--root",
+        metavar="PATH",
+        help=(
+            "Selective: only consider candidates under this instance path "
+            "(dot-separated Names, e.g. ServerScriptService or Workspace.MyModel). "
+            "Also read from .verde/partial.json when present."
+        ),
+    )
+    parser.add_argument(
+        "--tag",
+        metavar="TAG",
+        help=(
+            "Selective: only consider candidates that carry this CollectionService tag "
+            "(plus ancestors so hierarchy is preserved). Also read from .verde/partial.json."
+        ),
+    )
     args = parser.parse_args()
     import_rbxlx(
         args.extracted_dir,
@@ -1284,6 +1375,8 @@ def main() -> None:
         no_rename=args.no_rename,
         no_delete=args.no_delete,
         scripts_only=args.scripts_only,
+        root_filter=args.root,
+        tag_filter=args.tag,
     )
 
 
