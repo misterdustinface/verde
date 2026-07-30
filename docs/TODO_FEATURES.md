@@ -176,6 +176,17 @@ Full scripts-only Live Sync on a large place still walks and maps every script. 
 - Re-use the existing keep-map / partial.json helpers and the bridge’s current map-building path; no new long-lived state.
 - Stay inside non-goals (no auto-create/delete, scripts-first).
 
+### I6. Session-scoped Live Sync ignore list (temporary exclusions)
+
+**Why**  
+Artists often keep Live Sync on while heavily editing one or two scripts. Intermediate saves can bounce back and forth or be overwritten by a concurrent disk change. A temporary, session-only ignore list lets them protect those scripts without disabling Live Sync for the rest of the place or changing permanent scope.
+
+**Rough idea**  
+- Plugin panel gains a small “Ignore for this session” multi-line or tag-like list (accepts paths or UniqueIds already present in the map).  
+- On Live Sync enable the ignore set is sent to the bridge; push/pull skips those entries for the lifetime of the connection.  
+- List is cleared automatically on disconnect or toggle OFF; never written to disk, meta, or settings.  
+- Stays strictly inside existing non-goals (no permanent config, no auto-create/delete). Re-uses the current UniqueId map and HTTP surface with one optional additional field.
+
 ### SIMPLISTIC
 
 ### S1. Machine-readable `--json` output for `verde-search`, `verde-tags`, and `verde-set`/`verde-replace`
@@ -250,6 +261,17 @@ When a selective extract is active (`.verde/partial.json` present), a full statu
 - Accept the same `--root` / `--tag` flags already used by export.
 - Filter the manifest walk (and any bridge probe) to the corresponding paths.
 - Zero change when flags are absent. Minimal addition to `features/status.py` and the shared keep-map helpers.
+
+### S8. `verde-export --quiet` / `--verbose`
+
+**Why**  
+Large places already emit progress every 100 instances. Interactive users and CI scripts often want complete silence or, conversely, a full per-path list of create / reuse / overwrite / prune actions. Symmetric with the quiet/verbose flags already pending for import and merge.
+
+**Scope**  
+- Add mutually exclusive `--quiet` / `--verbose` (or `-q` / `-v`) to `extract.main`.  
+- Quiet: suppress the every-100 progress lines and the final “Exported N …” summary; still emit real errors on stderr.  
+- Verbose: after the walk, list every filesystem action taken (or that would be taken under `--dry-run`).  
+- Default behaviour unchanged. Minimal print-site edits in `extract.py`; re-uses existing keep-map, path-reuse, and progress helpers.
 
 ---
 
