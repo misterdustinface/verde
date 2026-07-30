@@ -55,16 +55,17 @@ from features.meta import (
 from interesting import load_interesting_props
 from xml_props import (
     FS_CASE_INSENSITIVE,
+    SCRIPT_EXTENSIONS,
     claim_unique_name,
     decode_tags_from_prop,
     decode_tags_from_structured,
     parse_property_element,
     parse_shared_strings,
+    resolve_item_name,
     sanitize_name,
+    script_extension_for,
 )
 
-
-SCRIPT_EXTS = (".lua", ".local.lua", ".module.lua")
 
 # Pattern that must appear in the extracted folder's .gitignore so machine-local
 # Referent files are never committed. Also used when creating a fresh file.
@@ -109,14 +110,6 @@ context more than from raw transcripts.
 This folder is intentionally outside the Roblox instance tree so agent context
 stays on disk with the project and stays out of Studio.
 """
-
-
-def get_script_extension(class_name: str) -> str:
-    if class_name == "LocalScript":
-        return ".local.lua"
-    if class_name == "ModuleScript":
-        return ".module.lua"
-    return ".lua"
 
 
 def extract_properties(
@@ -168,27 +161,6 @@ def extract_properties(
             flat[prop_name] = structured.get("value")
 
     return flat, tags, full, attributes
-
-
-def _resolve_name(
-    item: ET.Element,
-    flat: dict[str, Any],
-    full_props: dict[str, Any],
-) -> str:
-    if "Name" in flat and isinstance(flat["Name"], str) and flat["Name"]:
-        return flat["Name"]
-
-    structured = full_props.get("Name")
-    if isinstance(structured, dict):
-        val = structured.get("value")
-        if isinstance(val, str) and val:
-            return val
-
-    attr = item.get("name")
-    if attr:
-        return attr
-
-    return "Unnamed"
 
 
 def _item_has_tag(
@@ -264,7 +236,7 @@ def _find_root_item(root: ET.Element, path: str) -> ET.Element | None:
         found = None
         for it in current_list:
             flat, _, full, _ = extract_properties(it, set())
-            name = _resolve_name(it, flat, full)
+            name = resolve_item_name(it, flat=flat, full_props=full)
             if name == part or sanitize_name(name) == part:
                 found = it
                 break
@@ -340,7 +312,7 @@ def _cleanup_orphaned_uniquified(root: Path, written: dict[Path, set[str]]) -> i
             if is_under_ai_notes(entry, root):
                 continue
             stem = entry.name
-            for ext in SCRIPT_EXTS + (".robloxmeta.json", ".robloxmeta.local.json"):
+            for ext in SCRIPT_EXTENSIONS + (".robloxmeta.json", ".robloxmeta.local.json"):
                 if entry.name.endswith(ext):
                     stem = entry.name[: -len(ext)]
                     break
@@ -549,7 +521,7 @@ def extract(
         flat, tags, full_props, attributes = extract_properties(
             item, interesting, shared_strings
         )
-        raw_name = _resolve_name(item, flat, full_props)
+        raw_name = resolve_item_name(item, flat=flat, full_props=full_props)
         name = sanitize_name(raw_name)
 
         claimed = used_names.setdefault(current, set())
@@ -578,7 +550,7 @@ def extract(
 
             full_props.pop("Source", None)
 
-            ext = get_script_extension(class_name)
+            ext = script_extension_for(class_name)
             script_file = full_path.with_name(full_path.name + ext)
 
             _record(_maybe_write(script_file, source, interactive))

@@ -50,19 +50,6 @@ When a script is renamed in Studio or the on-disk meta still carries a stale Ref
 **Impact**  
 Operational friction / status noise on Live Sync after renames; no automatic data loss, but users can miss real mismatches among the noise.
 
-### 5. build.py still uses attribute-first `_resolve_item_name` + hardcoded script-extension chains (incomplete PR #48 wiring)
-
-PR #48 landed the shared pure helpers in `xml_props.py` (`resolve_item_name` property-preferring, `SCRIPT_EXTENSIONS` / `script_extension_for` / `parse_script_filename` / `strip_script_type_stem`) and fully wired `extract.py`. `build.py` still carries:
-
-- private `_resolve_item_name` that prefers the Item@name attribute first (then falls back to the Name property),
-- hardcoded ClassName ↔ extension if/elif blocks in `process_directory` and bare-script discovery,
-- manual `.module` / `.local` stem stripping when building path_keys.
-
-When Item@name and the Name property diverge, hierarchy path keys can mismatch and differential updates can be skipped or mis-routed. The shared helpers exist; the residual is incomplete call-site wiring + deletion of the private copies in build.
-
-**Impact**  
-Potential silent skip of updates or path-map drift on places where Item@name and Name property disagree; continued duplication risk for future extension / name policy changes.
-
 ---
 
 ## Intentional design (not bugs)
@@ -99,7 +86,7 @@ These behaviours are deliberate and should not be “fixed” without an explici
 - Selective `--tag` keep-map: after SharedString decode work, `_item_has_tag` / extract correctly populate `meta["Tags"]` for all currently supported forms. No additional Tags wire forms are known; keep the shared decoder as the single source of truth if Studio ever adds one.
 - Differential import `_get_tags` SharedString gap fixed (Previously corrected #29); the import path now passes the root SharedStrings table.
 - Live Sync metaRelPath now uses the correct type stem for ModuleScript / LocalScript (Previously corrected #26).
-- Name-resolution / script-extension divergence (Open #5) is the residual incomplete wiring of PR #48 into build.py; helpers exist and extract is complete.
+- Name-resolution / script-extension helpers are now fully shared and wired in both extract and build (Previously corrected #30). Path maps stay aligned on the property-preferring resolver.
 
 ---
 
@@ -136,6 +123,7 @@ These correctness problems were fixed during development and are no longer prese
 27. Attributes encode no longer produces a count/body desync on unknown structured `__type` values (those entries are filtered before the leading u32 count is written). Encode also accepts Live Sync Luau shapes for CFrame (`components` list → RotationId=0 + matrix) and EnumItem (`Name` present; `Value` defaults to 0). (this PR)
 28. `import_rbxlx` no longer swallows `write_manifest` failures. The bare `except Exception: pass` at the end of a successful differential import is replaced with a diagnostic print (same style as the Live Sync bridge path). A permission / disk / concurrent-access failure is now visible while the import itself still succeeds.
 29. Differential import `_get_tags` / `_needs_update` now receives the root SharedStrings table (via `parse_shared_strings`) so SharedString Tags decode to the real list instead of `[]`. First-import dirty noise and unnecessary BinaryString rewrites for those places are eliminated. (this PR)
+30. Shared property-preferring `resolve_item_name` + script ClassName↔extension helpers (`SCRIPT_EXTENSIONS`, `script_extension_for`, `parse_script_filename`, `strip_script_type_stem`) are now fully wired in both `extract.py` and `build.py`. Private attribute-first `_resolve_item_name` and hardcoded extension if/elif chains were deleted. Path maps stay aligned; future extension / name policy changes have a single source of truth. Completes the residual incomplete wiring of PR #48.
 
 ---
 
