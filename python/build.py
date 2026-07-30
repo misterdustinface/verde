@@ -1198,8 +1198,8 @@ def import_rbxlx(
         from features.sync import write_manifest
 
         write_manifest(input_path, rbxlx_path=out_path)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  ! write_manifest failed after import: {e}")
 
 
 def main() -> None:
