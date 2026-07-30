@@ -50,12 +50,18 @@ When a script is renamed in Studio or the on-disk meta still carries a stale Ref
 **Impact**  
 Operational friction / status noise on Live Sync after renames; no automatic data loss, but users can miss real mismatches among the noise.
 
-### 5. build.py `_resolve_item_name` remains attribute-first
+### 5. build.py still uses attribute-first `_resolve_item_name` + hardcoded script-extension chains (incomplete PR #48 wiring)
 
-Extract prefers the Name *property* (Studio source of truth) and falls back to the Item@name attribute. Import’s `_resolve_item_name` (and therefore path_map construction) still prefers the attribute first. When the two diverge (attribute lags or is absent), hierarchy path keys can mismatch and differential updates can be skipped or mis-routed. Open PR #48 is unifying both sides on a shared property-preferring `resolve_item_name`; residual until that lands.
+PR #48 landed the shared pure helpers in `xml_props.py` (`resolve_item_name` property-preferring, `SCRIPT_EXTENSIONS` / `script_extension_for` / `parse_script_filename` / `strip_script_type_stem`) and fully wired `extract.py`. `build.py` still carries:
+
+- private `_resolve_item_name` that prefers the Item@name attribute first (then falls back to the Name property),
+- hardcoded ClassName ↔ extension if/elif blocks in `process_directory` and bare-script discovery,
+- manual `.module` / `.local` stem stripping when building path_keys.
+
+When Item@name and the Name property diverge, hierarchy path keys can mismatch and differential updates can be skipped or mis-routed. The shared helpers exist; the residual is incomplete call-site wiring + deletion of the private copies in build.
 
 **Impact**  
-Potential silent skip of updates or path-map drift on places where Item@name and Name property disagree.
+Potential silent skip of updates or path-map drift on places where Item@name and Name property disagree; continued duplication risk for future extension / name policy changes.
 
 ---
 
@@ -93,7 +99,7 @@ These behaviours are deliberate and should not be “fixed” without an explici
 - Selective `--tag` keep-map: after SharedString decode work, `_item_has_tag` / extract correctly populate `meta["Tags"]` for all currently supported forms. No additional Tags wire forms are known; keep the shared decoder as the single source of truth if Studio ever adds one.
 - Differential import `_get_tags` SharedString gap fixed (Previously corrected #29); the import path now passes the root SharedStrings table.
 - Live Sync metaRelPath now uses the correct type stem for ModuleScript / LocalScript (Previously corrected #26).
-- Name-resolution divergence (attr-first vs property-first) elevated to Open #5; open refactor PR #48 is addressing the shared helper + wiring.
+- Name-resolution / script-extension divergence (Open #5) is the residual incomplete wiring of PR #48 into build.py; helpers exist and extract is complete.
 
 ---
 
