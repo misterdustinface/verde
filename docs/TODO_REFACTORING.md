@@ -1,13 +1,13 @@
 # TODO_REFACTORING.md — Verde
 
-High-quality, high-impact simplifications that reduce codebase size, improve readability (especially extracting common functions or modules), and are performance-neutral or better.  
+High-quality, high-impact simplifications that reduce codebase size, improve readability (especially by extracting common functions or modules), and are performance-neutral or better.  
 Purely stylistic or low-impact changes do not belong here. Defects stay in BUGS.md; features in TODO_FEATURES.md / FEATURES.md.
 
 ---
 
 ## Recommended
 
-*(none currently — residual scan after completing the shared uniqueness helper found no additional candidates that clear the high-impact + size-reduction + performance-neutral bar)*
+*(none currently — residual scan 2026-07-30 after the July 28–30 fix wave (SharedString Tags, import graft/create/prune, interesting extractor, Live Sync metaRelPath, Attributes encode fidelity, etc.) found no additional candidates that clear the high-impact + size-reduction + performance-neutral bar. Prior completed extractions (xml_props helpers, claim_unique_name, prompt_choices) remain complete and fully wired. Luau sanitiser is language-isolated by design.)*
 
 ---
 

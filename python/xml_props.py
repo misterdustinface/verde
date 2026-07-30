@@ -3,9 +3,9 @@
 Shared pure helpers for Roblox .rbxlx property / name handling.
 
 Extracted from extract.py and build.py so the structured property parser,
-name sanitisation, and related utilities live in one place. Used by both
-export and import paths to keep round-trips consistent and the codebase
-smaller / more readable.
+name sanitisation, script ClassName ↔ filesystem extension mapping, and
+related utilities live in one place. Used by both export and import paths
+to keep round-trips consistent and the codebase smaller / more readable.
 """
 
 from __future__ import annotations
@@ -17,6 +17,48 @@ from typing import Any
 
 
 FS_CASE_INSENSITIVE = platform.system() in ("Darwin", "Windows")
+
+# Canonical script ClassName ↔ filesystem extension mapping.
+# Single source of truth for export, import, bare-script discovery, and path_key
+# stripping. Keep in sync with Luau scriptRelPath / metaRelPath stems.
+SCRIPT_EXTENSIONS = (".lua", ".local.lua", ".module.lua")
+
+
+def script_extension_for(class_name: str) -> str:
+    """Return the filesystem extension for a script ClassName."""
+    if class_name == "LocalScript":
+        return ".local.lua"
+    if class_name == "ModuleScript":
+        return ".module.lua"
+    return ".lua"
+
+
+def parse_script_filename(name: str) -> tuple[str, str] | None:
+    """Return (ClassName, instance_name) for a script filename, or None if not a script.
+
+    Handles the three Verde extensions. The instance_name is the stem that should
+    appear in hierarchy path_keys (type suffix already stripped).
+    """
+    if name.endswith(".local.lua"):
+        return "LocalScript", name[: -len(".local.lua")]
+    if name.endswith(".module.lua"):
+        return "ModuleScript", name[: -len(".module.lua")]
+    if name.endswith(".lua"):
+        return "Script", name[: -len(".lua")]
+    return None
+
+
+def strip_script_type_stem(base: str) -> str:
+    """Strip a trailing .module / .local type stem from a meta/script base name.
+
+    Used when building hierarchy path_keys from companion meta filenames
+    (Name.module.robloxmeta.json → Name).
+    """
+    if base.endswith(".module"):
+        return base[: -len(".module")]
+    if base.endswith(".local"):
+        return base[: -len(".local")]
+    return base
 
 
 def sanitize_name(name: str) -> str:
@@ -44,6 +86,45 @@ def claim_unique_name(base: str, claimed: set[str]) -> str:
         key = name.casefold() if FS_CASE_INSENSITIVE else name
     claimed.add(key)
     return name
+
+
+def resolve_item_name(
+    item: ET.Element,
+    *,
+    flat: dict[str, Any] | None = None,
+    full_props: dict[str, Any] | None = None,
+) -> str:
+    """Resolve the display/Name of an Item, preferring the Name *property*.
+
+    Studio treats the Name property as the source of truth; the Item@name
+    attribute is often absent or lags. Preferring the property matches the
+    historical extract fix (v0.5.3) and keeps export/import path maps aligned.
+
+    When *flat* / *full_props* are already available (export path) they are
+    consulted first to avoid a second Properties walk. Otherwise the element
+    is inspected directly.
+    """
+    if flat is not None and isinstance(flat.get("Name"), str) and flat["Name"]:
+        return flat["Name"]
+
+    if full_props is not None:
+        structured = full_props.get("Name")
+        if isinstance(structured, dict):
+            val = structured.get("value")
+            if isinstance(val, str) and val:
+                return val
+
+    props = item.find("Properties")
+    if props is not None:
+        for p in props:
+            if p.get("name") == "Name" and p.text:
+                return p.text
+
+    attr = item.get("name")
+    if attr:
+        return attr
+
+    return "Unnamed"
 
 
 def parse_children(elem: ET.Element) -> dict[str, Any]:
