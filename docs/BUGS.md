@@ -22,45 +22,35 @@ When Open issues is empty, contains only “None currently.”, or is sparse (ro
 
 ## Open issues
 
-### 1. Attributes encode can emit corrupt / lossy `AttributesSerialize`
-
-Two related encode defects in `python/attributes.py` `encode_attributes`:
-
-1. **Count / body desync on unknown structured types.** Entries whose `__type` is not in the known set (and does not start with `Unknown_`) still have their name written, then `continue` without a type_id/value — while the leading `u32` count still includes them. The resulting BinaryString is misaligned for every subsequent attribute.
-2. **Live Sync CFrame / EnumItem shape mismatch.** Luau `encodeValue` stores CFrame as `{ __type = "CFrame", components = {…} }` and EnumItem as `{ EnumType, Name }`. Python encode expects CFrame `{ Position, RotationId, Rotation? }` and EnumItem `{ EnumType, Value }`. Attributes that reach disk via Live Sync experimental property sync and are later rebuilt by `verde-import` / full rebuild therefore lose CFrame orientation (zeros) and EnumItem values (Value defaults to 0).
-
-**Impact**  
-Data loss / corrupt Attributes on encode paths that mix Live Sync meta with offline rebuild, or that carry hand-authored unknown `__type` markers.
-
-### 2. Child order not preserved on Python full rebuild / import
+### 1. Child order not preserved on Python full rebuild / import
 
 `build.py` `process_directory` walks the filesystem with `sorted(iterdir())`. Roblox instance child order is therefore not restored on full rebuild. Differential import also leaves existing place children in their original order and does not re-order them to match the folder. Usually harmless for scripts, but prevents byte-identical round-trips and can affect order-sensitive behaviour (UI lists, some collection patterns).
 
 **Impact**  
 Non-identical rebuilds; rare behavioural differences for order-dependent instances.
 
-### 3. Attributes decode stops at first unknown type_id
+### 2. Attributes decode stops at first unknown type_id
 
 `attributes.decode_attributes` aborts the remaining attribute list as soon as it encounters an unrecognised type ID (it cannot safely skip a variable-length value). Later attributes in the same `AttributesSerialize` payload are therefore lost on extract. Encode also skips any `__type` that begins with `Unknown_`.
 
 **Impact**  
 Partial Attributes loss on places that use newer or rare attribute types; round-trip fidelity degrades for those instances.
 
-### 4. Root-level non-Item elements dropped on full rebuild
+### 3. Root-level non-Item elements dropped on full rebuild
 
 Full extract + build (and differential create paths) do not preserve top-level children of the `<roblox>` root other than `Item`s (`SharedStrings` table, `Meta`, `External*`, etc.). Tags that were SharedString references are re-emitted as BinaryString (so the common Tags case survives), but any other property that remains a SharedString md5 key, or any place that relies on the root SharedStrings table / Meta / External references, will lose those elements after a rebuild.
 
 **Impact**  
 Data loss / dangling references for places that use SharedString for non-Tags properties or that depend on root Meta/External. Full preservation is also tracked as APPROVED work in TODO_FEATURES; the current behaviour is still a correctness gap for those places.
 
-### 5. Live Sync “no matching script” noise after renames / stale Referent
+### 4. Live Sync “no matching script” noise after renames / stale Referent
 
 When a script is renamed in Studio or the on-disk meta still carries a stale Referent/UniqueId, the bridge path-matching falls back to name/path and reports “N file(s) had no matching script”. The count is surfaced (not silent), but large places accumulate noise and require a re-export or manual healing. Full Referent/UniqueId healing is tracked as I1 in TODO_FEATURES; until then this remains a residual robustness gap in the live path.
 
 **Impact**  
 Operational friction / status noise on Live Sync after renames; no automatic data loss, but users can miss real mismatches among the noise.
 
-### 6. `import_rbxlx` still swallows `write_manifest` failures
+### 5. `import_rbxlx` still swallows `write_manifest` failures
 
 At the end of a successful differential import, `build.import_rbxlx` refreshes `.verde/manifest.json` inside a bare `except Exception: pass`. Unlike the Live Sync bridge path (Previously corrected #21), a permission / disk / concurrent-access failure leaves the on-disk manifest stale with no diagnostic. Subsequent imports then re-treat clean files as dirty (or worse, re-skip creates incorrectly until `--force`).
 
@@ -98,10 +88,10 @@ These behaviours are deliberate and should not be “fixed” without an explici
 
 ## Remaining minor / edge-case notes
 
-- Full-rebuild child order (Open #2) is the only remaining order-related item; differential import intentionally does not reorder existing place children.
-- Bridge manifest write failures are now surfaced (Previously corrected #21); **import** still silent (Open #6).
+- Full-rebuild child order (Open #1) is the only remaining order-related item; differential import intentionally does not reorder existing place children.
+- Bridge manifest write failures are now surfaced (Previously corrected #21); **import** still silent (Open #5).
 - Shared uniqueness helper is now fully wired in both extract and build (Previously corrected #22).
-- Attributes unknown-type early-stop (Open #3) and encode fidelity (Open #1) are the main residual Attributes edge cases; known offline types round-trip fully when shapes match.
+- Attributes unknown-type early-stop (Open #2) remains the main residual Attributes edge case; encode now filters unknown structured types cleanly and accepts Luau CFrame/EnumItem shapes (Previously corrected #27).
 - Interesting-properties extractor is now line-oriented inside the return table (Previously corrected #25).
 - Selective `--tag` keep-map: after SharedString decode work, `_item_has_tag` / extract correctly populate `meta["Tags"]` for all currently supported forms. No additional Tags wire forms are known; keep the shared decoder as the single source of truth if Studio ever adds one.
 - Differential import `_get_tags` does not pass a SharedStrings table. Places that still store Tags as SharedString hashes will look “dirty” once and be rewritten as BinaryString (self-healing; not data loss after the first write).
@@ -139,6 +129,7 @@ These correctness problems were fixed during development and are no longer prese
 24. Differential import now always attempts create for a disk entry that is absent from the place (clean/manifest skip only applies when the place still has the matching Item). Missing intermediate parents are recursively grafted as Folders. This removes the need for `--force` when adding new/AI-generated scripts (including bare `.module.lua` with no companion `.robloxmeta.json`) and closes the residual “parent path missing; cannot auto-create” path. (PR pending)
 25. Fragile `interesting.py` property-name extraction. The interesting-properties list is now extracted with a line-oriented scan of the `return { ... }` table (comments stripped; only standalone double-quoted table rows collected). Falls back to the previous whole-file regex only if the structured pass yields nothing. Stops incidental double-quoted strings from polluting the set. (this PR)
 26. Live Sync Studio→folder meta path for ModuleScript / LocalScript. `Verde.metaRelPath` previously always appended bare `.robloxmeta.json` for any LuaSourceContainer, creating a second meta file at the wrong path while export writes `Name.module.robloxmeta.json` / `Name.local.robloxmeta.json`. Fixed so metaRelPath mirrors scriptRelPath type stems. (this PR)
+27. Attributes encode no longer produces a count/body desync on unknown structured `__type` values (those entries are filtered before the leading u32 count is written). Encode also accepts Live Sync Luau shapes for CFrame (`components` list → RotationId=0 + matrix) and EnumItem (`Name` present; `Value` defaults to 0). (this PR)
 
 ---
 
