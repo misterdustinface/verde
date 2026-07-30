@@ -103,6 +103,7 @@ from xml_props import (
     decode_tags_from_prop,
     parse_children,
     parse_property_element,
+    parse_shared_strings,
     sanitize_name,
 )
 
@@ -421,13 +422,13 @@ def _get_source(item: ET.Element) -> str:
     return ""
 
 
-def _get_tags(item: ET.Element) -> list[str]:
+def _get_tags(item: ET.Element, shared_strings: dict[str, str] | None = None) -> list[str]:
     props = item.find("Properties")
     if props is None:
         return []
     for p in props:
         if p.get("name") == "Tags":
-            return decode_tags_from_prop(p)
+            return decode_tags_from_prop(p, shared_strings)
     return []
 
 
@@ -557,6 +558,7 @@ def _needs_update(
     source: str | None,
     *,
     preserve_content: bool = False,
+    shared_strings: dict[str, str] | None = None,
 ) -> bool:
     if "ClassName" in meta and str(meta["ClassName"]) != (item.get("class") or ""):
         return True
@@ -573,7 +575,7 @@ def _needs_update(
         meta_tags = []
     elif isinstance(meta_tags, str):
         meta_tags = [meta_tags] if meta_tags else []
-    if list(meta_tags) != _get_tags(item):
+    if list(meta_tags) != _get_tags(item, shared_strings):
         return True
 
     meta_attrs = meta.get("Attributes") or {}
@@ -818,6 +820,8 @@ def import_rbxlx(
 
     tree = ET.parse(str(out_path))
     root = tree.getroot()
+
+    shared_strings = parse_shared_strings(root)
 
     referent_map, path_map, parent_map = _build_instance_maps(root)
 
@@ -1092,7 +1096,9 @@ def import_rbxlx(
             props["UniqueId"] = {"type": "UniqueId", "value": existing_uid}
             meta["Properties"] = props
 
-        if not _needs_update(item, meta, source, preserve_content=preserve_content):
+        if not _needs_update(
+            item, meta, source, preserve_content=preserve_content, shared_strings=shared_strings
+        ):
             unchanged += 1
             applied_items.add(item_id)
             matched_path_keys.add(path_key)
