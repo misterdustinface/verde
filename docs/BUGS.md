@@ -87,6 +87,7 @@ These behaviours are deliberate and should not be “fixed” without an explici
 - Differential import `_get_tags` SharedString gap fixed (Previously corrected #29); the import path now passes the root SharedStrings table.
 - Live Sync metaRelPath now uses the correct type stem for ModuleScript / LocalScript (Previously corrected #26).
 - Name-resolution / script-extension helpers are now fully shared and wired in both extract and build (Previously corrected #30). Path maps stay aligned on the property-preferring resolver.
+- Residual scan 2026-07-30 (post-PR #52): thorough pass over residual notes, extract/build/attributes/bridge/Luau/plugin surfaces and closed PRs #46–#52 confirmed no additional true defects that clear the Open elevation bar. Open remains the four items above.
 
 ---
 
