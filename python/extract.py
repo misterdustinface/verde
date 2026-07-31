@@ -19,8 +19,12 @@ search, and edit.
   - Paths that already exist on disk from a previous export are *reused* (no new
     digit suffix). Content is compared: identical files are left untouched;
     differing files are overwritten by default, or prompted with --interactive.
-  - After re-export, stale uniquified siblings (Name_N left when the collision
-    disappeared) are removed so the tree does not accumulate orphans.
+  - After a full (--all) re-export, stale uniquified siblings (Name_N left when the
+    collision disappeared) are removed so the tree does not accumulate orphans.
+    This aggressive cleanup is intentionally skipped under scripts-only / selective
+    exports: many real instances (including legitimate Names that end in _N) are
+    omitted by keep_map, and treating them as orphaned uniquify leftovers of a
+    kept base would delete unrelated directories when a new base is added.
 - After a successful export a .verde/manifest.json is written so later merge/import
   can skip unchanged files (simple adler32 hash + mtime).
 - Selective: --root PATH and/or --tag TAG limit the exported tree.
@@ -294,6 +298,12 @@ def _cleanup_orphaned_uniquified(root: Path, written: dict[Path, set[str]]) -> i
     (file or dir) is otherwise left behind because empty-dir prune only deletes
     empty directories. Only remove entries whose stem matches the uniquify
     pattern and whose bare base was claimed this run.
+
+    Callers must only invoke this on a full hierarchy export (scripts_only=False
+    and no --root / --tag). Under selective / scripts-only keep_map many real
+    instances are omitted; their legitimate Name_N paths would otherwise be
+    treated as orphaned uniquify leftovers of a kept base and deleted when a
+    new base-named sibling appears.
     """
     removed = 0
     for parent, used in written.items():
@@ -607,10 +617,17 @@ def extract(
             stack.append((child, full_path))
 
     pruned = _prune_empty_dirs(out)
-    orphans = _cleanup_orphaned_uniquified(out, written_names)
-    if orphans:
-        # Removing non-empty orphans can leave newly-empty parents; prune again.
-        pruned += _prune_empty_dirs(out)
+    orphans = 0
+    # Aggressive Name_N cleanup is only safe on a full hierarchy export.
+    # Under scripts-only or selective filters, many real instances (and their
+    # legitimate Names that happen to end in _N) are intentionally not written;
+    # treating those as "orphaned uniquified" of a kept base would delete
+    # unrelated directories when a new base-named directory is added.
+    if not scripts_only and not root_filter and not tag_filter:
+        orphans = _cleanup_orphaned_uniquified(out, written_names)
+        if orphans:
+            # Removing non-empty orphans can leave newly-empty parents; prune again.
+            pruned += _prune_empty_dirs(out)
 
     mode_bits = []
     if scripts_only:
