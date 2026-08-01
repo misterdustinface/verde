@@ -93,6 +93,11 @@ These behaviours are deliberate and should not be “fixed” without an explici
   - Open 1–4 remain accurate.
   - Open PR #60 (`fix/cleanup-orphaned-selective-false-positive`) addresses the user-reported data-loss under scripts-only / selective exports (aggressive Name_N cleanup deleting legitimate siblings whose bare base was claimed). Covered by open PR; not elevated into Open.
   - No additional elevatable true defects. Not-bugs / Intentional design honored. Open remains 1–4.
+- **2026-07-31 github-pickaxe residual scan:** Open issues sparse (4). Per skill hard requirement a residual scan was performed before any bug selection. Fresh review of residual notes + extract.py (cleanup path + keep_map), build.py (sorted iterdir + process_directory), attributes.py (unknown type_id early-stop), bridge surfaces, Luau, open PR #60, and recent commits. Confirmed:
+  - Open 1–4 remain accurate and are the only elevatable true defects.
+  - Open PR #60 continues to cover the selective/scripts-only Name_N false-positive cleanup; not re-elevated.
+  - None of Open 1–4 admits a focused, reviewable one-bug change set (child-order preservation, unknown-type skipping, root non-Item preservation, and Referent healing are larger / feature-adjacent; tracked or partially covered in TODO_FEATURES).
+  - No additional elevatable true defects found. Not-bugs / Intentional design honored. Open remains 1–4.
 
 ---
 
