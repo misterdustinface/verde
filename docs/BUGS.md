@@ -89,6 +89,10 @@ These behaviours are deliberate and should not be “fixed” without an explici
 - Name-resolution / script-extension helpers are now fully shared and wired in both extract and build (Previously corrected #30). Path maps stay aligned on the property-preferring resolver.
 - **2026-07-30 github-inspect residual scan (iterate):** Thorough re-scan of residual notes + extract.py / build.py / attributes.py / bridge.py / Luau Verde.luau / plugin / xml_props.py / tests confirmed no additional elevatable true defects beyond the existing Open 1–4. Silent-exception paths, path collisions, encoding edge cases, and Live Sync status paths are already addressed or intentionally scoped. Open issues count remains 4 (borderline sparse but accurate after exhaustive residual check).
 - **2026-07-30 github-inspect residual scan (this run):** Re-confirmed Open 1–4 by fresh code review of extract.py, build.py (sorted(iterdir) child order), attributes.py (unknown type_id early stop), bridge.py, Verde.luau, and VerdePlugin.server.luau. No open PRs; no new TODO/FIXME/HACK markers; Not-bugs / Intentional design section honored. No additional elevatable defects found. Open remains 1–4.
+- **2026-07-30 github-iterate residual scan:** Open issues borderline-sparse (4). Rule 0 fired residual scan. Fresh pass over residual notes + extract.py (incl. `_cleanup_orphaned_uniquified` always-on path), build.py, attributes.py, bridge surfaces, and open PR #60. Confirmed:
+  - Open 1–4 remain accurate.
+  - Open PR #60 (`fix/cleanup-orphaned-selective-false-positive`) addresses the user-reported data-loss under scripts-only / selective exports (aggressive Name_N cleanup deleting legitimate siblings whose bare base was claimed). Covered by open PR; not elevated into Open.
+  - No additional elevatable true defects. Not-bugs / Intentional design honored. Open remains 1–4.
 
 ---
 
