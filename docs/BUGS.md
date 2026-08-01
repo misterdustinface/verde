@@ -22,28 +22,21 @@ When Open issues is empty, contains only “None currently.”, or is sparse (ro
 
 ## Open issues
 
-### 1. Child order not preserved on Python full rebuild / import
-
-`build.py` `process_directory` walks the filesystem with `sorted(iterdir())`. Roblox instance child order is therefore not restored on full rebuild. Differential import also leaves existing place children in their original order and does not re-order them to match the folder. Usually harmless for scripts, but prevents byte-identical round-trips and can affect order-sensitive behaviour (UI lists, some collection patterns).
-
-**Impact**  
-Non-identical rebuilds; rare behavioural differences for order-dependent instances.
-
-### 2. Attributes decode stops at first unknown type_id
+### 1. Attributes decode stops at first unknown type_id
 
 `attributes.decode_attributes` aborts the remaining attribute list as soon as it encounters an unrecognised type ID (it cannot safely skip a variable-length value). Later attributes in the same `AttributesSerialize` payload are therefore lost on extract. Encode also skips any `__type` that begins with `Unknown_`.
 
 **Impact**  
 Partial Attributes loss on places that use newer or rare attribute types; round-trip fidelity degrades for those instances.
 
-### 3. Root-level non-Item elements dropped on full rebuild
+### 2. Root-level non-Item elements dropped on full rebuild
 
 Full extract + build (and differential create paths) do not preserve top-level children of the `<roblox>` root other than `Item`s (`SharedStrings` table, `Meta`, `External*`, etc.). Tags that were SharedString references are re-emitted as BinaryString (so the common Tags case survives), but any other property that remains a SharedString md5 key, or any place that relies on the root SharedStrings table / Meta / External references, will lose those elements after a rebuild.
 
 **Impact**  
 Data loss / dangling references for places that use SharedString for non-Tags properties or that depend on root Meta/External. Full preservation is also tracked as APPROVED work in TODO_FEATURES; the current behaviour is still a correctness gap for those places.
 
-### 4. Live Sync “no matching script” noise after renames / stale Referent
+### 3. Live Sync “no matching script” noise after renames / stale Referent
 
 When a script is renamed in Studio or the on-disk meta still carries a stale Referent/UniqueId, the bridge path-matching falls back to name/path and reports “N file(s) had no matching script”. The count is surfaced (not silent), but large places accumulate noise and require a re-export or manual healing. Full Referent/UniqueId healing is tracked as I1 in TODO_FEATURES; until then this remains a residual robustness gap in the live path.
 
@@ -78,10 +71,10 @@ These behaviours are deliberate and should not be “fixed” without an explici
 
 ## Remaining minor / edge-case notes
 
-- Full-rebuild child order (Open #1) is the only remaining order-related item; differential import intentionally does not reorder existing place children.
+- Full-rebuild child order is now preserved via `.verde-childorder` (Previously corrected #31); differential import intentionally does not reorder existing place children.
 - Bridge and import `write_manifest` failures are now both surfaced (Previously corrected #21 and #28).
 - Shared uniqueness helper is now fully wired in both extract and build (Previously corrected #22).
-- Attributes unknown-type early-stop (Open #2) remains the main residual Attributes edge case; encode now filters unknown structured types cleanly and accepts Luau CFrame/EnumItem shapes (Previously corrected #27).
+- Attributes unknown-type early-stop (Open #1) remains the main residual Attributes edge case; encode now filters unknown structured types cleanly and accepts Luau CFrame/EnumItem shapes (Previously corrected #27).
 - Interesting-properties extractor is now line-oriented inside the return table (Previously corrected #25).
 - Selective `--tag` keep-map: after SharedString decode work, `_item_has_tag` / extract correctly populate `meta["Tags"]` for all currently supported forms. No additional Tags wire forms are known; keep the shared decoder as the single source of truth if Studio ever adds one.
 - Differential import `_get_tags` SharedString gap fixed (Previously corrected #29); the import path now passes the root SharedStrings table.
@@ -93,6 +86,7 @@ These behaviours are deliberate and should not be “fixed” without an explici
   - Open 1–4 remain accurate.
   - Open PR #60 (`fix/cleanup-orphaned-selective-false-positive`) addresses the user-reported data-loss under scripts-only / selective exports (aggressive Name_N cleanup deleting legitimate siblings whose bare base was claimed). Covered by open PR; not elevated into Open.
   - No additional elevatable true defects. Not-bugs / Intentional design honored. Open remains 1–4.
+- **2026-07-31 github-pickaxe:** Fixed former Open #1 (child order on full rebuild) via `.verde-childorder` sidecars. Open renumbered to 1–3 (Attributes unknown-type, root non-Item, Live Sync rename noise). List remains sparse; next pickaxe/inspect must residual-scan or continue with the new #1. Open PR #60 still covers the selective cleanup false-positive.
 
 ---
 
@@ -130,6 +124,7 @@ These correctness problems were fixed during development and are no longer prese
 28. `import_rbxlx` no longer swallows `write_manifest` failures. The bare `except Exception: pass` at the end of a successful differential import is replaced with a diagnostic print (same style as the Live Sync bridge path). A permission / disk / concurrent-access failure is now visible while the import itself still succeeds.
 29. Differential import `_get_tags` / `_needs_update` now receives the root SharedStrings table (via `parse_shared_strings`) so SharedString Tags decode to the real list instead of `[]`. First-import dirty noise and unnecessary BinaryString rewrites for those places are eliminated. (this PR)
 30. Shared property-preferring `resolve_item_name` + script ClassName↔extension helpers (`SCRIPT_EXTENSIONS`, `script_extension_for`, `parse_script_filename`, `strip_script_type_stem`) are now fully wired in both `extract.py` and `build.py`. Private attribute-first `_resolve_item_name` and hardcoded extension if/elif chains were deleted. Path maps stay aligned; future extension / name policy changes have a single source of truth. Completes the residual incomplete wiring of PR #48.
+31. Full-rebuild child order is now preserved. `extract` records sibling order (XML order of claimed filesystem names) into `.verde-childorder` sidecars; `build.process_directory` reads the sidecar and emits children in that order (falling back to alphabetical for missing entries or absent sidecar). Differential import still leaves existing place children in their original order (intentional). Closes former Open #1.
 
 ---
 
