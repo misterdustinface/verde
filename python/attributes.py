@@ -339,6 +339,13 @@ def _encode_color3(buf: bytearray, value: dict[str, Any]) -> None:
     _write_f32(buf, float(value.get("B", 0)))
 
 
+# Identity rotation matrix — used when Rotation is missing, incomplete, or
+# all-zero. A zero matrix is singular; Roblox engine CFrame construction then
+# places the instance at extreme Y (commonly ~0, -100000, 0) and orientation is
+# lost. Identity at the encoded Position (or origin) is the safe fallback.
+_IDENTITY_ROTATION = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+
+
 def _encode_cframe(buf: bytearray, value: dict[str, Any]) -> None:
     """Encode CFrame from either native or Live Sync (Luau) shape.
 
@@ -346,6 +353,10 @@ def _encode_cframe(buf: bytearray, value: dict[str, Any]) -> None:
       {Position: {X,Y,Z}, RotationId: int, Rotation?: [9 floats]}
     Luau encodeValue (Live Sync experimental property sync):
       {components: [x,y,z, r00..r22]}  — 12 floats, treated as RotationId=0
+
+    Guard: when Rotation is absent, incomplete, or the zero matrix, write the
+    identity matrix instead. This prevents the engine sentinel position that
+    appeared on corrupted assets (favourite chair / sub-models at Y≈-1e5).
     """
     components = value.get("components")
     if isinstance(components, (list, tuple)) and len(components) >= 12:
@@ -356,6 +367,9 @@ def _encode_cframe(buf: bytearray, value: dict[str, Any]) -> None:
             "Z": float(components[2]),
         }
         matrix = [float(v) for v in components[3:12]]
+        # Still guard a zero/singular matrix that may arrive from Luau
+        if all(abs(v) < 1e-12 for v in matrix):
+            matrix = list(_IDENTITY_ROTATION)
         _encode_vector3(buf, pos)
         _write_u8(buf, 0)  # RotationId = 0 → arbitrary matrix follows
         for v in matrix:
@@ -367,9 +381,18 @@ def _encode_cframe(buf: bytearray, value: dict[str, Any]) -> None:
     rot_id = int(value.get("RotationId", 0))
     _write_u8(buf, rot_id)
     if rot_id == 0:
-        matrix = value.get("Rotation") or [0.0] * 9
-        for v in matrix[:9]:
-            _write_f32(buf, float(v))
+        matrix = value.get("Rotation")
+        if (
+            not matrix
+            or not isinstance(matrix, (list, tuple))
+            or len(matrix) < 9
+            or all(abs(float(v)) < 1e-12 for v in matrix[:9])
+        ):
+            matrix = list(_IDENTITY_ROTATION)
+        else:
+            matrix = [float(v) for v in matrix[:9]]
+        for v in matrix:
+            _write_f32(buf, v)
 
 
 def _encode_number_sequence(buf: bytearray, value: dict[str, Any]) -> None:
