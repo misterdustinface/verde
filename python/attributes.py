@@ -334,9 +334,24 @@ def _encode_vector3(buf: bytearray, value: dict[str, Any]) -> None:
 
 
 def _encode_color3(buf: bytearray, value: dict[str, Any]) -> None:
-    _write_f32(buf, float(value.get("R", 0)))
-    _write_f32(buf, float(value.get("G", 0)))
-    _write_f32(buf, float(value.get("B", 0)))
+    """Encode Color3 channels. Accepts R/G/B or r/g/b keys, or a 3-list.
+
+    Missing channels still default to 0 (black). Prefer uppercase keys from
+    decode; lowercase is accepted so partial / hand-edited metas do not
+    silently zero a channel that was present under a different case.
+    """
+    if isinstance(value, (list, tuple)) and len(value) >= 3:
+        r, g, b = float(value[0]), float(value[1]), float(value[2])
+    else:
+        r = value.get("R", value.get("r", 0))
+        g = value.get("G", value.get("g", 0))
+        b = value.get("B", value.get("b", 0))
+        r = float(r) if r is not None else 0.0
+        g = float(g) if g is not None else 0.0
+        b = float(b) if b is not None else 0.0
+    _write_f32(buf, r)
+    _write_f32(buf, g)
+    _write_f32(buf, b)
 
 
 # Identity rotation matrix — used when Rotation is missing, incomplete, or
