@@ -648,50 +648,118 @@ local function encodeValue(val: any): any
 	return nil
 end
 
+-- Hardened decode: accepts both Live Sync (__type + components/R/G/B) and
+-- offline Python structured form (type + children). Incomplete / singular
+-- CFrame matrices fall back to identity rotation at the given (or origin)
+-- position so the engine never invents the far-Y sentinel.
 local function decodeValue(encoded: any): any
-	if typeof(encoded) ~= "table" or encoded.__type == nil then
+	if typeof(encoded) ~= "table" then
 		return encoded
 	end
-	local ty = encoded.__type
-	if ty == "Color3" then
-		return Color3.new(encoded.R or 0, encoded.G or 0, encoded.B or 0)
+
+	local ty = encoded.__type or encoded.type
+	if ty == nil then
+		return encoded
+	end
+
+	-- Prefer children when present (offline export form)
+	local children = encoded.children
+	local src: any = if typeof(children) == "table" then children else encoded
+
+	if ty == "Color3" or ty == "Color3uint8" then
+		local r = tonumber(src.R or src.r) or 0
+		local g = tonumber(src.G or src.g) or 0
+		local b = tonumber(src.B or src.b) or 0
+		return Color3.new(r, g, b)
 	elseif ty == "Vector3" then
-		return Vector3.new(encoded.X or 0, encoded.Y or 0, encoded.Z or 0)
+		return Vector3.new(tonumber(src.X) or 0, tonumber(src.Y) or 0, tonumber(src.Z) or 0)
 	elseif ty == "Vector2" then
-		return Vector2.new(encoded.X or 0, encoded.Y or 0)
+		return Vector2.new(tonumber(src.X) or 0, tonumber(src.Y) or 0)
 	elseif ty == "UDim" then
-		return UDim.new(encoded.Scale or 0, encoded.Offset or 0)
+		return UDim.new(tonumber(src.Scale) or 0, tonumber(src.Offset) or 0)
 	elseif ty == "UDim2" then
-		local x, y = encoded.X or {}, encoded.Y or {}
-		return UDim2.new(x.Scale or 0, x.Offset or 0, y.Scale or 0, y.Offset or 0)
-	elseif ty == "CFrame" then
-		local c = encoded.components
+		local x = src.X or {}
+		local y = src.Y or {}
+		return UDim2.new(tonumber(x.Scale) or 0, tonumber(x.Offset) or 0, tonumber(y.Scale) or 0, tonumber(y.Offset) or 0)
+	elseif ty == "CFrame" or ty == "CoordinateFrame" then
+		local c = encoded.components or src.components
 		if typeof(c) == "table" and #c >= 12 then
-			return CFrame.new(c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8], c[9], c[10], c[11], c[12])
+			local matrixOk = false
+			for i = 4, 12 do
+				if math.abs(tonumber(c[i]) or 0) > 1e-12 then
+					matrixOk = true
+					break
+				end
+			end
+			if matrixOk then
+				return CFrame.new(
+					tonumber(c[1]) or 0, tonumber(c[2]) or 0, tonumber(c[3]) or 0,
+					tonumber(c[4]) or 1, tonumber(c[5]) or 0, tonumber(c[6]) or 0,
+					tonumber(c[7]) or 0, tonumber(c[8]) or 1, tonumber(c[9]) or 0,
+					tonumber(c[10]) or 0, tonumber(c[11]) or 0, tonumber(c[12]) or 1
+				)
+			end
+			-- singular / all-zero rotation → identity at position
+			return CFrame.new(tonumber(c[1]) or 0, tonumber(c[2]) or 0, tonumber(c[3]) or 0)
 		end
+		-- children form: X Y Z R00..R22 (missing rotation components → identity)
+		local x = tonumber(src.X) or 0
+		local y = tonumber(src.Y) or 0
+		local z = tonumber(src.Z) or 0
+		local r00 = tonumber(src.R00)
+		local r01 = tonumber(src.R01)
+		local r02 = tonumber(src.R02)
+		local r10 = tonumber(src.R10)
+		local r11 = tonumber(src.R11)
+		local r12 = tonumber(src.R12)
+		local r20 = tonumber(src.R20)
+		local r21 = tonumber(src.R21)
+		local r22 = tonumber(src.R22)
+		local hasAnyRot = r00 ~= nil or r01 ~= nil or r02 ~= nil or r10 ~= nil or r11 ~= nil or r12 ~= nil or r20 ~= nil or r21 ~= nil or r22 ~= nil
+		if not hasAnyRot then
+			return CFrame.new(x, y, z)
+		end
+		-- fill missing with identity; detect all-zero
+		r00 = r00 or 1
+		r01 = r01 or 0
+		r02 = r02 or 0
+		r10 = r10 or 0
+		r11 = r11 or 1
+		r12 = r12 or 0
+		r20 = r20 or 0
+		r21 = r21 or 0
+		r22 = r22 or 1
+		if math.abs(r00) < 1e-12 and math.abs(r01) < 1e-12 and math.abs(r02) < 1e-12
+			and math.abs(r10) < 1e-12 and math.abs(r11) < 1e-12 and math.abs(r12) < 1e-12
+			and math.abs(r20) < 1e-12 and math.abs(r21) < 1e-12 and math.abs(r22) < 1e-12
+		then
+			return CFrame.new(x, y, z)
+		end
+		return CFrame.new(x, y, z, r00, r01, r02, r10, r11, r12, r20, r21, r22)
 	elseif ty == "NumberRange" then
-		return NumberRange.new(encoded.Min or 0, encoded.Max or 0)
+		return NumberRange.new(tonumber(src.Min) or 0, tonumber(src.Max) or 0)
 	elseif ty == "Rect" then
-		local mn, mx = encoded.Min or {}, encoded.Max or {}
-		return Rect.new(mn.X or 0, mn.Y or 0, mx.X or 0, mx.Y or 0)
+		local mn = src.Min or {}
+		local mx = src.Max or {}
+		return Rect.new(tonumber(mn.X) or 0, tonumber(mn.Y) or 0, tonumber(mx.X) or 0, tonumber(mx.Y) or 0)
 	elseif ty == "BrickColor" then
-		return BrickColor.new(encoded.Number or 1)
+		return BrickColor.new(tonumber(src.Number) or 1)
 	elseif ty == "EnumItem" then
-		local enumType = (Enum :: any)[encoded.EnumType]
+		local enumType = (Enum :: any)[encoded.EnumType or src.EnumType]
 		if enumType then
-			return enumType[encoded.Name]
+			return enumType[encoded.Name or src.Name]
 		end
 	elseif ty == "ColorSequence" then
 		local kps = {}
-		for _, kp in (encoded.Keypoints or {}) do
+		for _, kp in (encoded.Keypoints or src.Keypoints or {}) do
 			local v = kp.Value or {}
-			table.insert(kps, ColorSequenceKeypoint.new(kp.Time or 0, Color3.new(v.R or 0, v.G or 0, v.B or 0)))
+			table.insert(kps, ColorSequenceKeypoint.new(tonumber(kp.Time) or 0, Color3.new(tonumber(v.R) or 0, tonumber(v.G) or 0, tonumber(v.B) or 0)))
 		end
 		if #kps >= 2 then return ColorSequence.new(kps) end
 	elseif ty == "NumberSequence" then
 		local kps = {}
-		for _, kp in (encoded.Keypoints or {}) do
-			table.insert(kps, NumberSequenceKeypoint.new(kp.Time or 0, kp.Value or 0, kp.Envelope or 0))
+		for _, kp in (encoded.Keypoints or src.Keypoints or {}) do
+			table.insert(kps, NumberSequenceKeypoint.new(tonumber(kp.Time) or 0, tonumber(kp.Value) or 0, tonumber(kp.Envelope) or 0))
 		end
 		if #kps >= 2 then return NumberSequence.new(kps) end
 	end
