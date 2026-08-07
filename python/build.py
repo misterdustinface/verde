@@ -130,6 +130,65 @@ _UNIQUIFY_RE = re.compile(r"^(.+)_([0-9]+)$")
 _SCRIPT_CLASSES = frozenset({"Script", "LocalScript", "ModuleScript"})
 _LEFTOVER_PRINT_LIMIT = 20
 
+# Identity CoordinateFrame / CFrame components. Incomplete or all-zero rotation
+# matrices cause the Roblox engine to place instances at extreme Y (commonly
+# ~0, -100000, 0) and lose orientation. Fill missing keys and replace singular
+# matrices before emit so corrupted or partial metas never produce the sentinel.
+_COORDINATE_FRAME_IDENTITY = {
+    "X": "0",
+    "Y": "0",
+    "Z": "0",
+    "R00": "1",
+    "R01": "0",
+    "R02": "0",
+    "R10": "0",
+    "R11": "1",
+    "R12": "0",
+    "R20": "0",
+    "R21": "0",
+    "R22": "1",
+}
+
+
+def _normalize_coordinate_frame_children(children: dict[str, Any] | None) -> dict[str, Any]:
+    """Fill missing CoordinateFrame components with identity; replace all-zero rotation.
+
+    Incomplete or singular matrices cause the Roblox engine to place instances at
+    extreme positions (commonly ~0, -100000, 0) and lose orientation. Identity at
+    the given (or origin) position is the safe fallback requested for corrupted
+    assets (favourite chair / sub-models).
+    """
+    if not isinstance(children, dict):
+        return dict(_COORDINATE_FRAME_IDENTITY)
+    out = dict(children)
+    for k, v in _COORDINATE_FRAME_IDENTITY.items():
+        if k not in out or out[k] is None or str(out[k]).strip() == "":
+            out[k] = v
+    try:
+        rot_vals = [
+            float(out[k])
+            for k in (
+                "R00",
+                "R01",
+                "R02",
+                "R10",
+                "R11",
+                "R12",
+                "R20",
+                "R21",
+                "R22",
+            )
+        ]
+        if all(abs(v) < 1e-12 for v in rot_vals):
+            for k, v in _COORDINATE_FRAME_IDENTITY.items():
+                if k.startswith("R"):
+                    out[k] = v
+    except (TypeError, ValueError):
+        for k, v in _COORDINATE_FRAME_IDENTITY.items():
+            if k.startswith("R"):
+                out[k] = v
+    return out
+
 
 def read_text(path: Path) -> str:
     try:
@@ -192,8 +251,14 @@ def _emit_property(props_elem: ET.Element, name: str, structured: dict[str, Any]
     el = ET.SubElement(props_elem, tag)
     el.set("name", name)
 
-    if "children" in structured and structured["children"]:
-        _emit_structured_children(el, structured["children"])
+    children = structured.get("children")
+    if tag in ("CoordinateFrame", "CFrame") and children is not None:
+        children = _normalize_coordinate_frame_children(
+            children if isinstance(children, dict) else None
+        )
+
+    if children:
+        _emit_structured_children(el, children)
     else:
         val = structured.get("value")
         el.text = str(val) if val is not None else ""
