@@ -34,10 +34,16 @@ candidate, so additions of missing files happen by default (no --force needed).
 
 After create/update, high-confidence renames and unmatched leftovers are handled:
 
-- High-confidence rename (any ClassName): exactly one newly-created sibling of
-  the same ClassName under the same parent (for scripts, identical Source is
-  preferred when present) → the old Item is removed by default.
-  Pass --no-rename to report only.
+- High-confidence rename (any ClassName): exactly one unmatched place Item of
+  a given ClassName under a parent *and* exactly one newly-created sibling of
+  the same ClassName under that parent (for scripts, identical Source is
+  preferred when present; differing Source refuses the rename) → the old Item
+  is removed by default.  This global 1:1 requirement prevents the previous
+  false-positive that deleted every unmatched sibling when a single new
+  sibling of the same ClassName was created (especially destructive under
+  --scripts-only, where Folder metas are filtered so many place Folders remain
+  unmatched).  Under scripts-only runs, non-script ClassNames are never
+  auto-renamed.  Pass --no-rename to report only.
 - Pure leftovers (unmatched place instances with no rename match) are removed
   by default, but only under parents that appear in the folder extract.
   Place content outside the exported tree is never pruned.
@@ -46,7 +52,8 @@ After create/update, high-confidence renames and unmatched leftovers are handled
 Scripts-only safety: when every candidate in the run is a Script / LocalScript /
 ModuleScript (or when --scripts-only is passed), pure prune is limited to those
 ClassNames so a normal scripts-only import does not wipe non-script content.
-High-confidence renames still apply to any ClassName.
+High-confidence renames are also limited to script ClassNames under scripts-only
+runs (non-script ClassNames are never auto-renamed in that mode).
 
 --scripts-only forces consideration of only script candidates and the scripts-only
 prune safety. Useful when the extracted tree was produced with --all but only
@@ -1238,6 +1245,15 @@ def import_rbxlx(
         updated += 1
 
     # --- High-confidence rename + leftover detection (all ClassNames) ---
+    # Strict 1:1 global pairing: only when *exactly one* unmatched place item
+    # of a given ClassName under a parent *and* exactly one newly-created item
+    # of the same ClassName under that parent do we treat it as a rename.
+    # The previous per-item "len(rename_candidates)==1" logic falsely deleted
+    # every unmatched sibling when a single new sibling of the same ClassName
+    # was created (catastrophic under --scripts-only, where Folder metas are
+    # filtered from candidates so many place Folders remain unmatched).
+    # Under scripts_only_run we additionally refuse to rename non-script
+    # ClassNames at all (pure prune already protects them).
     renames_applied = 0
     renames_reported = 0
     leftovers_reported = 0
@@ -1250,33 +1266,59 @@ def import_rbxlx(
             continue
         unmatched.append((path, item))
 
+    from collections import defaultdict
+    unmatched_by_parent_cls: dict[tuple[str, str], list[tuple[str, ET.Element]]] = defaultdict(list)
     for path, item in unmatched:
         parts = path.split("/") if path else []
         parent_path = "/".join(parts[:-1]) if len(parts) > 1 else ""
         cls = (item.get("class") or "").strip()
-        old_source = _get_source(item)
+        unmatched_by_parent_cls[(parent_path, cls)].append((path, item))
 
-        rename_candidates: list[str] = []
-        for created_path, created_cls, created_source in created_under.get(parent_path, []):
-            if created_cls != cls:
-                continue
-            if old_source and created_source is not None:
-                if created_source == old_source:
-                    rename_candidates.append(created_path)
+    for (parent_path, cls), group in unmatched_by_parent_cls.items():
+        # Belt-and-suspenders: under scripts-only never auto-rename Folders /
+        # other non-scripts (the 1:1 check already protects, but this makes
+        # the safety explicit and matches pure-prune policy).
+        if scripts_only_run and cls not in _SCRIPT_CLASSES:
+            for path, item in group:
+                if parent_path not in extract_parents:
+                    continue
+                leftovers_reported += 1
+                line = f"  · leftover / possible deletion: {path} ({cls or 'instance'})"
+                if leftovers_reported <= _LEFTOVER_PRINT_LIMIT:
+                    leftover_lines.append(line)
+                if not no_delete:
+                    if _remove_item_from_tree(item, parent_map, root, path_map, path):
+                        pruned += 1
+            continue
+
+        created_list: list[tuple[str, str | None]] = [
+            (created_path, created_source)
+            for created_path, created_cls, created_source in created_under.get(parent_path, [])
+            if created_cls == cls
+        ]
+
+        if len(group) == 1 and len(created_list) == 1:
+            path, item = group[0]
+            new_path, created_source = created_list[0]
+            old_source = _get_source(item)
+            # Prefer Source equality when both sides have Source (scripts).
+            # If both have Source and they differ, treat as leftover instead.
+            if old_source and created_source is not None and old_source != created_source:
+                # Fall through to leftover handling below
+                pass
             else:
-                rename_candidates.append(created_path)
+                renames_reported += 1
+                print(f"  · rename detected: {path} → {new_path} ({cls or 'instance'})")
+                if not no_rename:
+                    if _remove_item_from_tree(item, parent_map, root, path_map, path):
+                        renames_applied += 1
+                continue
 
-        if len(rename_candidates) == 1:
-            new_path = rename_candidates[0]
-            renames_reported += 1
-            print(f"  · rename detected: {path} → {new_path} ({cls or 'instance'})")
-            if not no_rename:
-                if _remove_item_from_tree(item, parent_map, root, path_map, path):
-                    renames_applied += 1
-        else:
-            # Pure leftover safety gates:
-            # 1. scripts-only runs only prune script ClassNames
-            # 2. only prune under parents that exist in the folder extract
+        # Pure leftover safety gates for the whole group (or the 1:1 that
+        # failed Source match):
+        # 1. scripts-only runs only prune script ClassNames (already gated above)
+        # 2. only prune under parents that exist in the folder extract
+        for path, item in group:
             if scripts_only_run and cls not in _SCRIPT_CLASSES:
                 continue
             if parent_path not in extract_parents:
