@@ -1,0 +1,116 @@
+diff --git a/python/build.py b/python/build.py
+index d1f53ce..d87bffa 100644
+--- a/python/build.py
++++ b/python/build.py
+@@ -519,6 +519,37 @@ def _get_unique_id(item: ET.Element) -> str | None:
+     return None
+ 
+ 
++def _build_uid_map(root: ET.Element) -> dict[str, ET.Element]:
++    """Map UniqueId → Item for identity matching when Referent is absent."""
++    uid_map: dict[str, ET.Element] = {}
++    for item in root.iter("Item"):
++        if item.tag != "Item":
++            continue
++        uid = _get_unique_id(item)
++        if uid and uid not in uid_map:
++            uid_map[uid] = item
++    return uid_map
++
++
++def _is_real_named_uniquify_path(c: dict[str, Any]) -> bool:
++    """True when path Foo_2 is a real instance named Foo_2, not a collision suffix.
++
++    Collision leftovers have meta Name equal to the bare stem (Foo) or no Name.
++    A real sibling whose Name property is Foo_2 must be imported, even when a
++    Foo sibling exists and Referent is missing (local.json is gitignored).
++    """
++    path_key = c.get("path_key") or ""
++    is_uni, _bare = _is_uniquified_path(path_key)
++    if not is_uni:
++        return False
++    stem = path_key.split("/")[-1]
++    meta = c.get("meta") or {}
++    meta_name = meta.get("Name")
++    if meta_name is None:
++        return False
++    return str(meta_name) == stem
++
++
+ def _meta_unique_id(meta: dict[str, Any]) -> str | None:
+     """Return UniqueId value stored in a folder meta, if any."""
+     props = meta.get("Properties") or {}
+@@ -917,6 +948,7 @@ def import_rbxlx(
+     shared_strings = parse_shared_strings(root)
+ 
+     referent_map, path_map, parent_map = _build_instance_maps(root)
++    uid_map = _build_uid_map(root)
+ 
+     # --- Collect candidates (always; clean ones still mark place matches) ---
+     candidates: list[dict[str, Any]] = []
+@@ -1025,7 +1057,17 @@ def import_rbxlx(
+ 
+     for c in candidates:
+         is_uni, bare = _is_uniquified_path(c["path_key"])
+-        if is_uni and bare in path_keys_present and not c["ref"]:
++        # A path like Foo_2 is only a uniquify leftover when it has no identity
++        # of its own. Referent lives in gitignored local.json, so AI agents and
++        # other machines often have none. UniqueId (shared) or a meta Name that
++        # equals the _N stem means this is a real sibling — keep it.
++        if (
++            is_uni
++            and bare in path_keys_present
++            and not c["ref"]
++            and not c.get("uid")
++            and not _is_real_named_uniquify_path(c)
++        ):
+             print(f"  · skip redundant disk entry {c['rel']} (Name_N leftover of {bare})")
+             skipped_redundant += 1
+             continue
+@@ -1156,8 +1198,11 @@ def import_rbxlx(
+         clean = bool(c.get("clean"))
+ 
+         item: ET.Element | None = None
++        uid = c.get("uid")
+         if ref and ref in referent_map:
+             item = referent_map[ref]
++        elif uid and uid in uid_map:
++            item = uid_map[uid]
+         elif path_key and path_key in path_map:
+             item = path_map[path_key]
+ 
+@@ -1275,20 +1320,10 @@ def import_rbxlx(
+         unmatched_by_parent_cls[(parent_path, cls)].append((path, item))
+ 
+     for (parent_path, cls), group in unmatched_by_parent_cls.items():
+-        # Belt-and-suspenders: under scripts-only never auto-rename Folders /
+-        # other non-scripts (the 1:1 check already protects, but this makes
+-        # the safety explicit and matches pure-prune policy).
++        # Under scripts-only never auto-rename or prune Folders / other
++        # non-scripts. A previous version of this block reported those
++        # Folders as leftovers and deleted them whenever --delete was set.
+         if scripts_only_run and cls not in _SCRIPT_CLASSES:
+-            for path, item in group:
+-                if parent_path not in extract_parents:
+-                    continue
+-                leftovers_reported += 1
+-                line = f"  · leftover / possible deletion: {path} ({cls or 'instance'})"
+-                if leftovers_reported <= _LEFTOVER_PRINT_LIMIT:
+-                    leftover_lines.append(line)
+-                if not no_delete:
+-                    if _remove_item_from_tree(item, parent_map, root, path_map, path):
+-                        pruned += 1
+             continue
+ 
+         created_list: list[tuple[str, str | None]] = [
+@@ -1297,7 +1332,9 @@ def import_rbxlx(
+             if created_cls == cls
+         ]
+ 
+-        if len(group) == 1 and len(created_list) == 1:
++        # 1:1 same-ClassName pairing is not identity for assets (Folder /
++        # MeshPart / Part_2, …). Only scripts with matching Source may rename.
++        if len(group) == 1 and len(created_list) == 1 and cls in _SCRIPT_CLASSES:
+             path, item = group[0]
+             new_path, created_source = created_list[0]
+             old_source = _get_source(item)

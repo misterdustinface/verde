@@ -1,0 +1,62 @@
+diff --git a/python/extract.py b/python/extract.py
+index c6949a0..ca98b1d 100644
+--- a/python/extract.py
++++ b/python/extract.py
+@@ -287,6 +287,27 @@ def _prune_empty_dirs(root: Path) -> int:
+     return removed
+ 
+ 
++def _cleanup_entry_meta_name(entry: Path, stem: str) -> str | None:
++    """Return the Name property stored next to *entry*, if any."""
++    candidates: list[Path] = []
++    if entry.is_dir():
++        candidates.append(entry / ".robloxmeta.json")
++    else:
++        candidates.append(entry.parent / f"{stem}.robloxmeta.json")
++        if entry.name.endswith(".robloxmeta.json"):
++            candidates.append(entry)
++    for meta_path in candidates:
++        if not meta_path.is_file():
++            continue
++        try:
++            data = json.loads(meta_path.read_text(encoding="utf-8"))
++        except (OSError, json.JSONDecodeError):
++            continue
++        if isinstance(data, dict) and data.get("Name"):
++            return str(data["Name"])
++    return None
++
++
+ def _cleanup_orphaned_uniquified(root: Path, written: dict[Path, set[str]]) -> int:
+     """Remove stale Name_N siblings left from a prior collision that no longer exists.
+ 
+@@ -333,6 +354,10 @@ def _cleanup_orphaned_uniquified(root: Path, written: dict[Path, set[str]]) -> i
+                 base_used = base in used
+             if not base_used:
+                 continue
++            # Real instance whose Name is Foo_2 — not a uniquify leftover of Foo.
++            meta_name = _cleanup_entry_meta_name(entry, stem)
++            if meta_name is not None and meta_name == stem:
++                continue
+             try:
+                 if entry.is_dir():
+                     shutil.rmtree(entry)
+@@ -607,10 +632,14 @@ def extract(
+             stack.append((child, full_path))
+ 
+     pruned = _prune_empty_dirs(out)
+-    orphans = _cleanup_orphaned_uniquified(out, written_names)
+-    if orphans:
+-        # Removing non-empty orphans can leave newly-empty parents; prune again.
+-        pruned += _prune_empty_dirs(out)
++    orphans = 0
++    # Aggressive Name_N cleanup is only safe on a full hierarchy export.
++    # Under scripts-only / selective keep_map many real *_N instances are
++    # omitted; treating them as uniquify leftovers of a kept base deletes assets.
++    if not scripts_only and not root_filter and not tag_filter:
++        orphans = _cleanup_orphaned_uniquified(out, written_names)
++        if orphans:
++            pruned += _prune_empty_dirs(out)
+ 
+     mode_bits = []
+     if scripts_only:
