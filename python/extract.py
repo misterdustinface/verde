@@ -19,8 +19,7 @@ search, and edit.
   - Paths that already exist on disk from a previous export are *reused* (no new
     digit suffix). Content is compared: identical files are left untouched;
     differing files are overwritten by default, or prompted with --interactive.
-  - After re-export, stale uniquified siblings (Name_N left when the collision
-    disappeared) are removed so the tree does not accumulate orphans.
+  - Re-export retains unvisited siblings; numeric suffixes alone never prove deletion.
 - After a successful export a .verde/manifest.json is written so later merge/import
   can skip unchanged files (simple adler32 hash + mtime).
 - Selective: --root PATH and/or --tag TAG limit the exported tree.
@@ -35,9 +34,9 @@ search, and edit.
 from __future__ import annotations
 
 import argparse
+import base64
+import struct
 import json
-import re
-import shutil
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -54,8 +53,6 @@ from features.meta import (
 )
 from interesting import load_interesting_props
 from xml_props import (
-    FS_CASE_INSENSITIVE,
-    SCRIPT_EXTENSIONS,
     claim_unique_name,
     decode_tags_from_prop,
     decode_tags_from_structured,
@@ -143,7 +140,17 @@ def extract_properties(
 
         if prop_name == "AttributesSerialize" and structured.get("type") == "BinaryString":
             decoded = decode_attributes(structured.get("value") or "")
-            if decoded:
+            raw = structured.get("value") or ""
+            try:
+                payload = base64.b64decode(raw)
+                count = struct.unpack_from("<I", payload)[0]
+                complete = len(decoded) == count and not any(
+                    isinstance(v, dict) and str(v.get("__type", "")).startswith("Unknown_")
+                    for v in decoded.values()
+                )
+            except (ValueError, struct.error):
+                complete = False
+            if complete:
                 attributes = decoded
                 full.pop("AttributesSerialize", None)
             continue
@@ -218,7 +225,7 @@ def _compute_keep_map(
         elif tag_filter:
             keep[id(item)] = has_tag or has_kept_child
         else:
-            keep[id(item)] = is_script or has_kept_child
+            keep[id(item)] = not scripts_only or is_script or has_kept_child
 
     return keep
 
@@ -284,63 +291,6 @@ def _prune_empty_dirs(root: Path) -> int:
         except OSError:
             pass
 
-    return removed
-
-
-def _cleanup_orphaned_uniquified(root: Path, written: dict[Path, set[str]]) -> int:
-    """Remove stale Name_N siblings left from a prior collision that no longer exists.
-
-    When path-reuse writes a survivor back to the bare Name, the old Name_2
-    (file or dir) is otherwise left behind because empty-dir prune only deletes
-    empty directories. Only remove entries whose stem matches the uniquify
-    pattern and whose bare base was claimed this run.
-    """
-    removed = 0
-    for parent, used in written.items():
-        if not parent.is_dir():
-            continue
-        # Never touch the AI agent notes tree.
-        if parent.name == AI_NOTES_DIRNAME and parent.parent == root:
-            continue
-        if is_under_ai_notes(parent, root):
-            continue
-        try:
-            entries = list(parent.iterdir())
-        except OSError:
-            continue
-        for entry in entries:
-            if is_under_ai_notes(entry, root):
-                continue
-            stem = entry.name
-            for ext in SCRIPT_EXTENSIONS + (".robloxmeta.json", ".robloxmeta.local.json"):
-                if entry.name.endswith(ext):
-                    stem = entry.name[: -len(ext)]
-                    break
-            # Already used this run → keep
-            if FS_CASE_INSENSITIVE:
-                if any(stem.casefold() == u.casefold() for u in used):
-                    continue
-            else:
-                if stem in used:
-                    continue
-            m = re.match(r"^(.+)_([0-9]+)$", stem)
-            if not m:
-                continue
-            base = m.group(1)
-            if FS_CASE_INSENSITIVE:
-                base_used = any(base.casefold() == u.casefold() for u in used)
-            else:
-                base_used = base in used
-            if not base_used:
-                continue
-            try:
-                if entry.is_dir():
-                    shutil.rmtree(entry)
-                else:
-                    entry.unlink()
-                removed += 1
-            except OSError:
-                pass
     return removed
 
 
@@ -470,6 +420,13 @@ def extract(
 
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
+    document = ET.Element(root.tag, root.attrib)
+    for child in root:
+        if child.tag != "Item":
+            document.append(child)
+    state_dir = out / ".verde"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    ET.ElementTree(document).write(state_dir / "document.xml", encoding="utf-8", xml_declaration=True)
 
     script_count = 0
     instance_count = 0
@@ -490,7 +447,7 @@ def extract(
         start_items = [c for c in root if c.tag == "Item"]
 
     keep_map: dict[int, bool] | None = None
-    if scripts_only or tag_filter:
+    if scripts_only or tag_filter or root_filter:
         keep_map = _compute_keep_map(
             start_items if root_filter else [c for c in root if c.tag == "Item"],
             scripts_only=scripts_only,
@@ -500,15 +457,25 @@ def extract(
         if tag_filter:
             print(f"  Selective tag: {tag_filter}")
 
-    used_names: dict[Path, set[str]] = {}  # keys for uniqueness (casefolded when needed)
-    written_names: dict[Path, set[str]] = {}  # actual names assigned this run
+    if root_filter:
+        # Retain ancestor directories: flattening the selected root breaks the
+        # path keys consumed by selective import and live target resolution.
+        parents = {child: parent for parent in root.iter("Item")
+                   for child in parent if child.tag == "Item"}
+        ancestor = found
+        while ancestor in parents:
+            ancestor = parents[ancestor]
+            keep_map[id(ancestor)] = True
+        start_items = [c for c in root if c.tag == "Item"]
 
-    stack: list[tuple[ET.Element, Path]] = []
-    for top in reversed(start_items):
-        stack.append((top, out))
+    used_names: dict[Path, set[str]] = {}  # keys for uniqueness (casefolded when needed)
+
+    stack: list[tuple[ET.Element, Path, int]] = []
+    for order, top in reversed(list(enumerate(start_items))):
+        stack.append((top, out, order))
 
     while stack:
-        item, current = stack.pop()
+        item, current, order = stack.pop()
         if item.tag != "Item":
             continue
 
@@ -526,7 +493,6 @@ def extract(
 
         claimed = used_names.setdefault(current, set())
         name = claim_unique_name(name, claimed)
-        written_names.setdefault(current, set()).add(name)
 
         full_path = current / name
         instance_count += 1
@@ -557,6 +523,7 @@ def extract(
 
             meta: dict[str, Any] = {
                 "ClassName": class_name,
+                "_VerdeOrder": order,
                 "Name": raw_name,
                 "Tags": tags,
                 "Properties": full_props,
@@ -583,13 +550,14 @@ def extract(
 
             if will_write_children:
                 full_path.mkdir(parents=True, exist_ok=True)
-                for child in reversed(child_items):
-                    stack.append((child, full_path))
+                for child_order, child in reversed(list(enumerate(child_items))):
+                    stack.append((child, full_path, child_order))
             continue
 
         full_path.mkdir(parents=True, exist_ok=True)
         meta = {
             "ClassName": class_name,
+            "_VerdeOrder": order,
             "Name": raw_name,
             "Tags": tags,
             "Properties": full_props,
@@ -603,14 +571,13 @@ def extract(
         meta_path = full_path / ".robloxmeta.json"
         _record(_write_meta_pair(meta_path, meta, interactive))
 
-        for child in reversed(list(item)):
-            stack.append((child, full_path))
+        child_items = [c for c in item if c.tag == "Item"]
+        for child_order, child in reversed(list(enumerate(child_items))):
+            stack.append((child, full_path, child_order))
 
     pruned = _prune_empty_dirs(out)
-    orphans = _cleanup_orphaned_uniquified(out, written_names)
-    if orphans:
-        # Removing non-empty orphans can leave newly-empty parents; prune again.
-        pruned += _prune_empty_dirs(out)
+    # A numeric suffix does not prove that a path is an orphan. In particular,
+    # selective exports may omit a legitimate sibling or locally edited script.
 
     mode_bits = []
     if scripts_only:
@@ -631,8 +598,6 @@ def extract(
         print(f"  Skipped   : {skipped_count} (interactive)")
     if pruned:
         print(f"  Empty dirs removed: {pruned}")
-    if orphans:
-        print(f"  Orphaned uniquified removed: {orphans}")
 
     # Ensure the extracted tree ignores machine-local Referent files in git.
     try:
@@ -652,7 +617,7 @@ def extract(
     except OSError as exc:
         print(f"  ({AI_NOTES_DIRNAME}/ not ensured: {exc})")
 
-    if root_filter or tag_filter:
+    if scripts_only or root_filter or tag_filter:
         partial = {
             "root": root_filter,
             "tag": tag_filter,
@@ -665,6 +630,9 @@ def extract(
             json.dumps(partial, indent=2), encoding="utf-8"
         )
         print(f"  Partial   : {partial_dir / 'partial.json'}")
+    else:
+        # A later full export must not inherit an earlier selective scope.
+        (out / ".verde" / "partial.json").unlink(missing_ok=True)
 
     try:
         from features.sync import write_manifest

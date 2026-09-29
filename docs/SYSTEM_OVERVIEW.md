@@ -24,6 +24,14 @@ Verde focuses on:
 
 Scripts become real `.lua` / `.local.lua` / `.module.lua` files. Everything else becomes a folder + `.robloxmeta.json`.
 
+Imports remove unmatched instances and suspected old names by default, retaining
+the original design. `--no-delete --no-rename` enables report-only handling.
+The flags retain their independent controls. Export records scripts-only
+scope automatically and retains ancestry for selective roots. Root XML tables
+are retained in `.verde/document.xml` for rebuilds. See
+[the safety audit](IMPORT_EXPORT_AUDIT.md) for verification and remaining limits.
+
+
 ### Critical: open place vs on-disk `.rbxlx`
 
 | Tool | Updates `.rbxlx` on disk | Updates **open** Studio place |

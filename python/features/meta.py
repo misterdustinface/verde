@@ -73,10 +73,15 @@ def is_under_ai_notes(path: Path, root: Path) -> bool:
 
 
 def load_meta(path: Path) -> dict[str, Any] | None:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    if not path.exists():
         return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError) as exc:
+        raise ValueError(f"Cannot read metadata {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"Metadata {path} must contain an object")
+    return data
 
 
 def local_meta_path(shared_meta_path: Path) -> Path:

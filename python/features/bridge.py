@@ -23,6 +23,7 @@ For offline folder ↔ .rbxlx agreement (without Studio open), use verde-merge.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import threading
 import time
@@ -55,7 +56,7 @@ class BridgeState:
         self.running = True
 
     def refresh_dirty(self) -> set[str]:
-        dirty = dirty_paths(self.root, self.manifest)
+        dirty = dirty_paths(self.root, self.manifest, mtime_win=False)
         with self.lock:
             newly = dirty - self.pending_to_studio
             if newly:
@@ -73,21 +74,23 @@ class BridgeState:
                     self.events = self.events[-50:]
             return dirty
 
-    def mark_applied(self, paths: list[str]) -> None:
+    def mark_applied(self, paths: list[str], versions: dict[str, str] | None = None) -> None:
         with self.lock:
-            for p in paths:
-                self.pending_to_studio.discard(p)
             for rel in paths:
                 path = self.root / rel
                 if path.is_file():
                     try:
                         raw = path.read_bytes()
+                        if versions is not None and versions.get(rel) != hashlib.sha256(raw).hexdigest():
+                            self.pending_to_studio.add(rel)
+                            continue
                         st = path.stat()
+                        self.pending_to_studio.discard(rel)
                         self.known[rel] = {"h": content_hash(raw), "m": st.st_mtime}
                     except OSError:
                         pass
             try:
-                write_manifest(self.root, extra={"live_sync": True})
+                write_manifest(self.root, extra={"live_sync": True, "files": dict(self.known), "rbxlx_mtime": None})
                 self.manifest = load_manifest(self.root) or self.manifest
             except Exception as e:
                 print(f"  ! write_manifest failed after mark_applied: {e}")
@@ -106,15 +109,18 @@ class BridgeState:
                 and rel.endswith(".robloxmeta.json")
                 and not rel.endswith(".robloxmeta.local.json")
             ):
-                try:
-                    raw_text = content if isinstance(content, str) else content.decode("utf-8")
-                    data = json.loads(raw_text)
-                    if isinstance(data, dict) and "Referent" in data:
-                        shared, local = split_local_keys(data)
-                        text = json.dumps(shared, indent=2)
-                        save_local_meta(path, local)
-                except Exception:
-                    text = None
+                raw_text = content if isinstance(content, str) else content.decode("utf-8")
+                data = json.loads(raw_text)
+                if not isinstance(data, dict):
+                    raise ValueError("Studio metadata must contain an object")
+                previous = load_meta_merged(path) or {}
+                previous_props = dict(previous.get("Properties") or {})
+                previous_props.update(data.get("Properties") or {})
+                previous.update(data)
+                previous["Properties"] = previous_props
+                shared, local = split_local_keys(previous)
+                text = json.dumps(shared, indent=2)
+                save_local_meta(path, local)
 
             if text is not None:
                 path.write_text(text, encoding="utf-8")
@@ -131,7 +137,7 @@ class BridgeState:
                 self.known[rel] = {"h": content_hash(raw), "m": st.st_mtime}
                 self.pending_to_studio.discard(rel)
                 try:
-                    write_manifest(self.root, extra={"live_sync": True})
+                    write_manifest(self.root, extra={"live_sync": True, "files": dict(self.known), "rbxlx_mtime": None})
                     self.manifest = load_manifest(self.root) or self.manifest
                 except Exception as e:
                     print(f"  ! write_manifest failed after write_file {rel}: {e}")
@@ -201,7 +207,8 @@ def make_handler(state: BridgeState):
                 with state.lock:
                     newer = [e for e in state.events if e["id"] > since]
                     last_id = state.last_event_id
-                self._json(200, {"events": newer, "last_id": last_id})
+                    pending = sorted(state.pending_to_studio)
+                self._json(200, {"events": newer, "last_id": last_id, "pending": pending})
                 return
 
             if path == "/file":
@@ -214,8 +221,12 @@ def make_handler(state: BridgeState):
                     self._json(404, {"error": "not found"})
                     return
                 try:
-                    text = fpath.read_text(encoding="utf-8")
-                    self._text(200, text)
+                    raw = fpath.read_bytes()
+                    text = raw.decode("utf-8")
+                    if (qs.get("envelope") or [""])[0] == "1":
+                        self._json(200, {"content": text, "revision": hashlib.sha256(raw).hexdigest()})
+                    else:
+                        self._text(200, text)
                 except Exception as e:
                     self._json(500, {"error": str(e)})
                 return
@@ -234,7 +245,8 @@ def make_handler(state: BridgeState):
                             base = base[: -len(suf)]
                             break
                     candidates.append(p.parent / f"{base}.robloxmeta.json")
-                candidates.append(p.parent / ".robloxmeta.json")
+                else:
+                    candidates.append(p.parent / ".robloxmeta.json")
                 for c in candidates:
                     full = state.root / c
                     if full.is_file():
@@ -261,7 +273,7 @@ def make_handler(state: BridgeState):
 
             if path == "/applied":
                 paths = body.get("paths") or []
-                state.mark_applied(paths)
+                state.mark_applied(paths, versions=body.get("versions"))
                 self._json(200, {"ok": True})
                 return
 

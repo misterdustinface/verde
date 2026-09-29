@@ -54,3 +54,20 @@ The plugin will error at load time if the Verde ModuleScript cannot be required.
 | Export place | `verde-export` | (file-system) |
 | Import on disk | `verde-import` | does **not** refresh open Studio — use Live Sync |
 | Offline folder ↔ place file | `verde-merge` | (file-system; mtime-win today) |
+
+## Sync failure handling
+
+Only successfully read and applied files are acknowledged. New acknowledgements
+include the SHA-256 revision from the read; a later disk edit stays pending.
+Update the Python bridge and plugin together. Unmatched targets
+and apply failures remain pending and are retried. Python records only the
+acknowledged files, so applying one file does not mark unrelated edits clean.
+Ambiguous duplicate names and guessed `_N` suffix targets are refused instead
+of selecting a potentially unrelated instance. Re-export metadata after a
+rename when a stable identity is unavailable.
+
+These changes have Python bridge regression coverage and pass Luau compilation.
+Partial Studio pushes now surface errors, and metadata pushes retain offline
+properties and child order. The Luau changes still
+require Studio runtime verification; this repository does not currently have
+an automated Studio test harness. See [the safety audit](../docs/IMPORT_EXPORT_AUDIT.md).

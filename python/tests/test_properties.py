@@ -37,7 +37,7 @@ def test_string_and_bool_roundtrip(tmp_path: Path):
     src = tmp_path / "in.rbxlx"
     src.write_text(xml, encoding="utf-8")
     out = tmp_path / "extracted"
-    extract.extract(str(src), str(out))
+    extract.extract(str(src), str(out), scripts_only=False)
 
     meta = json.loads((out / "TestPart" / ".robloxmeta.json").read_text())
     assert meta["ClassName"] == "Part"
@@ -77,7 +77,7 @@ def test_vector3_and_color3(tmp_path: Path):
     src = tmp_path / "in.rbxlx"
     src.write_text(xml, encoding="utf-8")
     out = tmp_path / "extracted"
-    extract.extract(str(src), str(out))
+    extract.extract(str(src), str(out), scripts_only=False)
 
     meta = json.loads((out / "TestPart" / ".robloxmeta.json").read_text())
     pos = meta["Properties"]["Position"]
@@ -120,7 +120,7 @@ def test_coordinateframe(tmp_path: Path):
     src = tmp_path / "in.rbxlx"
     src.write_text(xml, encoding="utf-8")
     out = tmp_path / "extracted"
-    extract.extract(str(src), str(out))
+    extract.extract(str(src), str(out), scripts_only=False)
 
     meta = json.loads((out / "TestPart" / ".robloxmeta.json").read_text())
     cf = meta["Properties"]["CFrame"]
@@ -158,7 +158,7 @@ def test_numbersequence(tmp_path: Path):
     src = tmp_path / "in.rbxlx"
     src.write_text(xml, encoding="utf-8")
     out = tmp_path / "extracted"
-    extract.extract(str(src), str(out))
+    extract.extract(str(src), str(out), scripts_only=False)
 
     meta = json.loads((out / "TestPart" / ".robloxmeta.json").read_text())
     seq = meta["Properties"]["Transparency"]
@@ -180,7 +180,7 @@ def test_tags_binarystring(tmp_path: Path):
     src = tmp_path / "in.rbxlx"
     src.write_text(xml, encoding="utf-8")
     out = tmp_path / "extracted"
-    extract.extract(str(src), str(out))
+    extract.extract(str(src), str(out), scripts_only=False)
 
     meta = json.loads((out / "TestPart" / ".robloxmeta.json").read_text())
     assert meta["Tags"] == tags
@@ -199,7 +199,7 @@ def test_empty_tags(tmp_path: Path):
     src = tmp_path / "in.rbxlx"
     src.write_text(xml, encoding="utf-8")
     out = tmp_path / "extracted"
-    extract.extract(str(src), str(out))
+    extract.extract(str(src), str(out), scripts_only=False)
 
     meta = json.loads((out / "TestPart" / ".robloxmeta.json").read_text())
     assert meta["Tags"] == []
@@ -223,7 +223,7 @@ def test_script_source_extracted(tmp_path: Path):
     src = tmp_path / "in.rbxlx"
     src.write_text(xml, encoding="utf-8")
     out = tmp_path / "extracted"
-    extract.extract(str(src), str(out))
+    extract.extract(str(src), str(out), scripts_only=False)
 
     script_file = out / "MyModule.module.lua"
     assert script_file.is_file()
@@ -250,7 +250,7 @@ def test_interesting_props_override(tmp_path: Path):
     src = tmp_path / "in.rbxlx"
     src.write_text(xml, encoding="utf-8")
     out = tmp_path / "extracted"
-    extract.extract(str(src), str(out), interesting={"SoundId"})
+    extract.extract(str(src), str(out), interesting={"SoundId"}, scripts_only=False)
 
     meta = json.loads((out / "TestPart" / ".robloxmeta.json").read_text())
     assert meta.get("SoundId") == "rbxassetid://999"
@@ -286,7 +286,7 @@ def test_nested_hierarchy(tmp_path: Path):
     src = tmp_path / "in.rbxlx"
     src.write_text(xml, encoding="utf-8")
     out = tmp_path / "extracted"
-    extract.extract(str(src), str(out))
+    extract.extract(str(src), str(out), scripts_only=False)
 
     assert (out / "RootFolder" / ".robloxmeta.json").is_file()
     assert (out / "RootFolder" / "ChildPart" / ".robloxmeta.json").is_file()
@@ -321,7 +321,7 @@ def test_script_with_tags(tmp_path: Path):
     src = tmp_path / "in.rbxlx"
     src.write_text(xml, encoding="utf-8")
     out = tmp_path / "extracted"
-    extract.extract(str(src), str(out))
+    extract.extract(str(src), str(out), scripts_only=False)
 
     script_file = out / "Handler.local.lua"
     assert script_file.is_file()
@@ -369,7 +369,7 @@ def test_name_from_property_only(tmp_path: Path):
     src = tmp_path / "in.rbxlx"
     src.write_text(xml, encoding="utf-8")
     out = tmp_path / "extracted"
-    extract.extract(str(src), str(out))
+    extract.extract(str(src), str(out), scripts_only=False)
 
     # Filesystem must use the real Names, not Unnamed
     assert (out / "Workspace" / ".robloxmeta.json").is_file()

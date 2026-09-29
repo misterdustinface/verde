@@ -73,6 +73,21 @@ verde-export MyPlace.rbxlx code/
 
 That creates a `code/` folder with script files you can edit. Point `verde-sync` at that same folder.
 
+For the complete game hierarchy, use `verde-export MyPlace.rbxlx code/ --all`.
+Import edits with `verde-import code/ MyPlace.rbxlx`. Import still removes
+unmatched instances and suspected old names by default, as originally designed.
+Use `--no-delete --no-rename` to keep those instances and report only.
+Referent/UniqueId matches update existing instances.
+Numeric suffixes alone never cause export deletion or import omission.
+Changed Source is detected by content even if an AI tool preserves its timestamp;
+`--force` remains available to reapply files recorded as unchanged.
+
+Rebuilds from new exports retain root XML tables in `.verde/document.xml`.
+Keep the `.verde` directory with the export. Invalid metadata or unreadable
+script Source aborts import; place writes use a temporary file and replacement
+so an incomplete XML write does not truncate the original.
+
+
 ---
 
 ## Install the Studio plugin (once)
