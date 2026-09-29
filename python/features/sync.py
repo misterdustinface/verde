@@ -145,6 +145,7 @@ def is_file_dirty(
     manifest: dict[str, Any] | None,
     *,
     rbxlx_mtime: float | None = None,
+    mtime_win: bool = True,
 ) -> bool:
     path = root / rel
     if not path.is_file():
@@ -167,6 +168,9 @@ def is_file_dirty(
     if not hash_differs and not mtime_differs:
         return False
 
+    if hash_differs and not mtime_win:
+        return True
+
     recorded_rbxlx_m = manifest.get("rbxlx_mtime")
     if recorded_rbxlx_m is not None:
         if entry["m"] < float(recorded_rbxlx_m):
@@ -182,6 +186,7 @@ def dirty_paths(
     manifest: dict[str, Any] | None = None,
     *,
     rbxlx_mtime: float | None = None,
+    mtime_win: bool = True,
 ) -> set[str]:
     if manifest is None:
         manifest = load_manifest(root)
@@ -197,7 +202,7 @@ def dirty_paths(
             continue
         if rel.split("/")[0] == AI_NOTES_DIRNAME:
             continue
-        if is_file_dirty(root, rel, manifest, rbxlx_mtime=rbxlx_mtime):
+        if is_file_dirty(root, rel, manifest, rbxlx_mtime=rbxlx_mtime, mtime_win=mtime_win):
             dirty.add(rel)
     return dirty
 

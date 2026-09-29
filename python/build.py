@@ -38,12 +38,12 @@ After create/update, high-confidence renames and unmatched leftovers are handled
   a given ClassName under a parent *and* exactly one newly-created sibling of
   the same ClassName under that parent (for scripts, identical Source is
   preferred when present; differing Source refuses the rename) → the old Item
-  is removed by default.  This global 1:1 requirement prevents the previous
+  is removed by default. This global 1:1 requirement prevents the previous
   false-positive that deleted every unmatched sibling when a single new
   sibling of the same ClassName was created (especially destructive under
   --scripts-only, where Folder metas are filtered so many place Folders remain
   unmatched).  Under scripts-only runs, non-script ClassNames are never
-  auto-renamed.  Pass --no-rename to report only.
+  auto-renamed. Pass --no-rename to report only.
 - Pure leftovers (unmatched place instances with no rename match) are removed
   by default, but only under parents that appear in the folder extract.
   Place content outside the exported tree is never pruned.
@@ -70,20 +70,19 @@ by a selective export):
 
 When a .verde/manifest.json is present, files whose simple numeric hash + mtime
 match the recorded entry are skipped for writing *only when the place still has
-the match* (and mtime-wins is applied against the .rbxlx). After a successful
+the match* (changed hashes are never suppressed by place timestamps). After a successful
 import the manifest is refreshed.
 
---force bypasses the clean / mtime-win skips so every matching folder entry is
+--force bypasses the clean-manifest skips so every matching folder entry is
 considered for application (still only written when content actually differs
 via _needs_update). Useful when timestamps have drifted or the place was
 touched outside Verde.
 
 Differential import deliberately skips redundant on-disk entries so they are
 never applied into the place:
-- Multiple metas sharing the same Referent → only one is kept.
-- Multiple metas sharing the same UniqueId (from meta) → only one is kept.
-- Uniquified paths (Name_N) when a bare Name sibling is also present and the
-  _N entry has no distinct Referent → treated as leftover and skipped.
+- Multiple metas sharing the same Referent → import aborts before writing.
+- Multiple metas sharing the same UniqueId (from meta) → import aborts before writing.
+- Numeric suffixes alone never identify redundant entries.
 - A place Item is updated at most once per import run.
 
 Property merge on differential apply:
@@ -111,7 +110,8 @@ from __future__ import annotations
 import argparse
 import base64
 import json
-import re
+import os
+import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
@@ -133,7 +133,6 @@ from xml_props import (
 )
 
 
-_UNIQUIFY_RE = re.compile(r"^(.+)_([0-9]+)$")
 _SCRIPT_CLASSES = frozenset({"Script", "LocalScript", "ModuleScript"})
 _LEFTOVER_PRINT_LIMIT = 20
 
@@ -198,10 +197,7 @@ def _normalize_coordinate_frame_children(children: dict[str, Any] | None) -> dic
 
 
 def read_text(path: Path) -> str:
-    try:
-        return path.read_text(encoding="utf-8")
-    except Exception:
-        return ""
+    return path.read_text(encoding="utf-8")
 
 
 def load_meta(path: Path) -> dict[str, Any]:
@@ -294,23 +290,25 @@ def add_properties(
     name_val = meta.get("Name")
     if name_val is None and isinstance(full.get("Name"), dict):
         name_val = full["Name"].get("value")
-    if name_val is not None and str(name_val) and "Name" not in full:
+    if name_val is not None and "Name" not in full:
         el = ET.SubElement(props, "string")
         el.set("name", "Name")
         el.text = str(name_val)
 
     for prop_name, structured in full.items():
-        if prop_name == "Source":
+        if prop_name == "Source" and source is not None:
             continue
-        if prop_name == "AttributesSerialize":
+        if prop_name == "AttributesSerialize" and "Attributes" in meta:
             continue
-        if prop_name == "Tags" and tags:
+        if prop_name == "Tags" and "Tags" in meta:
             continue
         if not isinstance(structured, dict) or "type" not in structured:
             el = ET.SubElement(props, "string")
             el.set("name", prop_name)
             el.text = str(structured)
             continue
+        if prop_name == "Name" and name_val is not None:
+            structured = {"type": "string", "value": str(name_val)}
         _emit_property(props, prop_name, structured)
 
     if tags:
@@ -334,7 +332,7 @@ def add_properties(
 
     already = set(full.keys()) | {"Source", "Tags", "AttributesSerialize", "Name"}
     for key, val in meta.items():
-        if key in ("ClassName", "Name", "Tags", "Attributes", "Properties", "Referent") or key in already:
+        if key in ("ClassName", "Name", "Tags", "Attributes", "Properties", "Referent", "_VerdeOrder") or key in already:
             continue
         if isinstance(val, (str, int, float, bool)):
             if isinstance(val, bool) or (isinstance(val, str) and val.lower() in ("true", "false")):
@@ -355,7 +353,20 @@ def add_properties(
 
 
 def process_directory(dir_path: Path, parent_element: ET.Element) -> None:
-    for item in sorted(dir_path.iterdir()):
+    ordered_entries = []
+    for entry in dir_path.iterdir():
+        if entry.name.startswith("."):
+            continue
+        if entry.is_file() and parse_script_filename(entry.name) is not None:
+            entry_meta = script_meta_for(entry)
+        elif entry.is_dir():
+            entry_meta = load_meta(entry)
+        else:
+            entry_meta = {}
+        order = entry_meta.get("_VerdeOrder")
+        order = order if isinstance(order, int) and order >= 0 else float("inf")
+        ordered_entries.append((order, entry.name, entry))
+    for _, _, item in sorted(ordered_entries):
         if item.name.startswith("."):
             continue
         # Explicit: never import the AI agent notes tree (also covered by '.'
@@ -407,6 +418,22 @@ def process_directory(dir_path: Path, parent_element: ET.Element) -> None:
         process_directory(item, item_elem)
 
 
+def _write_place(tree: ET.ElementTree, destination: str | Path) -> None:
+    """Replace the place only after the complete XML has been written."""
+    path = Path(destination)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            tree.write(stream, encoding="utf-8", xml_declaration=True)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if path.exists():
+            os.chmod(temporary, path.stat().st_mode & 0o777)
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
 def build_rbxlx(input_dir: str, output_rbxlx: str = "RebuiltPlace.rbxlx") -> None:
     input_path = Path(input_dir)
     if not input_path.is_dir():
@@ -415,16 +442,20 @@ def build_rbxlx(input_dir: str, output_rbxlx: str = "RebuiltPlace.rbxlx") -> Non
 
     print(f"Building .rbxlx from: {input_dir}")
 
-    root = ET.Element("roblox")
-    root.set("version", "4")
-    ET.SubElement(root, "ExternalScriptReferences")
-    ET.SubElement(root, "ExternalAssets")
+    document_path = input_path / ".verde" / "document.xml"
+    if document_path.is_file():
+        root = ET.parse(document_path).getroot()
+    else:
+        root = ET.Element("roblox")
+        root.set("version", "4")
+        ET.SubElement(root, "ExternalScriptReferences")
+        ET.SubElement(root, "ExternalAssets")
 
     process_directory(input_path, root)
 
     tree = ET.ElementTree(root)
     ET.indent(tree, space="  ")
-    tree.write(output_rbxlx, encoding="utf-8", xml_declaration=True)
+    _write_place(tree, output_rbxlx)
 
     print(f"✓ Successfully created: {output_rbxlx}")
     print("You can now open this file in Roblox Studio.")
@@ -531,20 +562,6 @@ def _meta_unique_id(meta: dict[str, Any]) -> str | None:
     return None
 
 
-def _is_uniquified_path(path_key: str) -> tuple[bool, str]:
-    """If the final path segment looks like Name_N, return (True, bare path)."""
-    if not path_key:
-        return False, path_key
-    parts = path_key.split("/")
-    last = parts[-1]
-    m = _UNIQUIFY_RE.match(last)
-    if not m:
-        return False, path_key
-    bare_last = m.group(1)
-    bare = "/".join(parts[:-1] + [bare_last]) if len(parts) > 1 else bare_last
-    return True, bare
-
-
 def _current_structured_props(item: ET.Element) -> dict[str, Any]:
     full: dict[str, Any] = {}
     props_elem = item.find("Properties")
@@ -630,8 +647,6 @@ def _needs_update(
         return True
     if "Name" in meta and str(meta["Name"]) != resolve_item_name(item):
         return True
-    if "Referent" in meta and str(meta["Referent"]) != (item.get("referent") or ""):
-        return True
 
     if source is not None and source != _get_source(item):
         return True
@@ -641,11 +656,11 @@ def _needs_update(
         meta_tags = []
     elif isinstance(meta_tags, str):
         meta_tags = [meta_tags] if meta_tags else []
-    if list(meta_tags) != _get_tags(item, shared_strings):
+    if "Tags" in meta and list(meta_tags) != _get_tags(item, shared_strings):
         return True
 
     meta_attrs = meta.get("Attributes") or {}
-    if meta_attrs != _get_attributes(item):
+    if "Attributes" in meta and meta_attrs != _get_attributes(item):
         return True
 
     place_props = _current_structured_props(item)
@@ -656,7 +671,7 @@ def _needs_update(
     if merged_props != place_props:
         return True
 
-    special = {"ClassName", "Name", "Tags", "Attributes", "Properties", "Referent"}
+    special = {"ClassName", "Name", "Tags", "Attributes", "Properties", "Referent", "_VerdeOrder"}
     already = set(meta_props.keys()) | {"Source", "Tags", "AttributesSerialize"}
     for key, val in meta.items():
         if key in special or key in already:
@@ -686,14 +701,22 @@ def _apply_meta_to_item(
         item.set("class", str(meta["ClassName"]))
     if "Name" in meta:
         item.set("name", str(meta["Name"]))
-    if "Referent" in meta:
-        item.set("referent", str(meta["Referent"]))
-
+    # Keep the target serialization identity so Ref properties remain valid.
     place_props = _current_structured_props(item)
     meta_props = dict(meta.get("Properties") or {})
     merged = _merge_structured_props(
         place_props, meta_props, preserve_content=preserve_content
     )
+    # Absent keys in a partial meta are not requests to clear script data.
+    props_element = item.find("Properties")
+    if props_element is not None:
+        for prop in props_element:
+            key = prop.get("name")
+            if ((key == "Source" and source is None)
+                    or (key == "Tags" and "Tags" not in meta)
+                    or (key == "AttributesSerialize" and "Attributes" not in meta)):
+                if key not in meta_props:
+                    merged[key] = parse_property_element(prop)
     existing_uid = _get_unique_id(item)
     if existing_uid is not None:
         merged["UniqueId"] = {"type": "UniqueId", "value": existing_uid}
@@ -787,27 +810,6 @@ def _ensure_parent_path(
     return current_parent
 
 
-def _prefer_candidate(
-    a: dict[str, Any],
-    b: dict[str, Any],
-    path_map: dict[str, ET.Element],
-) -> dict[str, Any]:
-    """Prefer the candidate whose path exists in the place, else non-uniquified name."""
-    a_in_place = a["path_key"] in path_map if a["path_key"] else False
-    b_in_place = b["path_key"] in path_map if b["path_key"] else False
-    if a_in_place and not b_in_place:
-        return a
-    if b_in_place and not a_in_place:
-        return b
-    a_uni, _ = _is_uniquified_path(a["path_key"] or "")
-    b_uni, _ = _is_uniquified_path(b["path_key"] or "")
-    if a_uni and not b_uni:
-        return b
-    if b_uni and not a_uni:
-        return a
-    return a  # stable: keep first
-
-
 def _remove_item_from_tree(
     item: ET.Element,
     parent_map: dict[ET.Element, ET.Element | None],
@@ -866,7 +868,7 @@ def import_rbxlx(
 
     print(f"Importing changes from {extracted_dir} → existing {output_rbxlx}")
     if force:
-        print("  (--force: mtime-win / clean-manifest skips disabled)")
+        print("  (--force: clean-manifest skips disabled)")
     if preserve_content:
         print("  (--preserve-content: blank meta Content will not overwrite place values)")
     if no_rename:
@@ -883,9 +885,9 @@ def import_rbxlx(
         try:
             partial = json.loads(partial_path.read_text(encoding="utf-8"))
             if not isinstance(partial, dict):
-                partial = None
-        except Exception:
-            partial = None
+                raise ValueError("partial.json must contain an object")
+        except (ValueError, OSError) as exc:
+            raise ValueError(f"Cannot safely read import scope {partial_path}: {exc}") from exc
 
     effective_root = root_filter or (partial.get("root") if partial else None)
     effective_tag = tag_filter or (partial.get("tag") if partial else None)
@@ -917,6 +919,16 @@ def import_rbxlx(
     shared_strings = parse_shared_strings(root)
 
     referent_map, path_map, parent_map = _build_instance_maps(root)
+    uid_map: dict[str, ET.Element] = {}
+    ambiguous_uids: set[str] = set()
+    for instance in path_map.values():
+        uid = _get_unique_id(instance)
+        if uid:
+            if uid in uid_map:
+                ambiguous_uids.add(uid)
+            uid_map[uid] = instance
+    for uid in ambiguous_uids:
+        uid_map.pop(uid, None)
 
     # --- Collect candidates (always; clean ones still mark place matches) ---
     candidates: list[dict[str, Any]] = []
@@ -925,7 +937,7 @@ def import_rbxlx(
         if force or manifest is None or is_file_dirty is None:
             return False
         for r in related_rels:
-            if is_file_dirty(input_path, r, manifest, rbxlx_mtime=rbxlx_mtime):
+            if is_file_dirty(input_path, r, manifest, rbxlx_mtime=rbxlx_mtime, mtime_win=False):
                 return False
         return True
 
@@ -1016,55 +1028,23 @@ def import_rbxlx(
             }
         )
 
-    # --- Drop redundant disk entries ---
+    # --- Validate candidate identities before any place mutation ---
     by_ref: dict[str, dict[str, Any]] = {}
     by_uid: dict[str, dict[str, Any]] = {}
-    path_keys_present = {c["path_key"] for c in candidates if c["path_key"]}
     kept: list[dict[str, Any]] = []
     skipped_redundant = 0
 
     for c in candidates:
-        is_uni, bare = _is_uniquified_path(c["path_key"])
-        if is_uni and bare in path_keys_present and not c["ref"]:
-            print(f"  · skip redundant disk entry {c['rel']} (Name_N leftover of {bare})")
-            skipped_redundant += 1
-            continue
-
         if c["ref"]:
-            prev = by_ref.get(c["ref"])
-            if prev is not None:
-                winner = _prefer_candidate(prev, c, path_map)
-                if winner is prev:
-                    print(f"  · skip redundant disk entry {c['rel']} (same Referent as {prev['rel']})")
-                    skipped_redundant += 1
-                    continue
-                print(f"  · skip redundant disk entry {prev['rel']} (same Referent as {c['rel']})")
-                skipped_redundant += 1
-                kept = [k for k in kept if k is not prev]
-                by_ref[c["ref"]] = c
-                if prev.get("uid"):
-                    by_uid.pop(prev["uid"], None)
-            else:
-                by_ref[c["ref"]] = c
-
+            if c["ref"] in by_ref:
+                other = by_ref[c["ref"]]
+                raise ValueError(f"Duplicate Referent in {other['rel']} and {c['rel']}; clear copied identity metadata before importing")
+            by_ref[c["ref"]] = c
         if c["uid"]:
-            prev = by_uid.get(c["uid"])
-            if prev is not None and prev is not c:
-                winner = _prefer_candidate(prev, c, path_map)
-                if winner is prev:
-                    print(f"  · skip redundant disk entry {c['rel']} (same UniqueId as {prev['rel']})")
-                    skipped_redundant += 1
-                    if c["ref"] and by_ref.get(c["ref"]) is c:
-                        by_ref.pop(c["ref"], None)
-                    continue
-                print(f"  · skip redundant disk entry {prev['rel']} (same UniqueId as {c['rel']})")
-                skipped_redundant += 1
-                kept = [k for k in kept if k is not prev]
-                by_uid[c["uid"]] = c
-                if prev.get("ref") and by_ref.get(prev["ref"]) is prev:
-                    by_ref.pop(prev["ref"], None)
-            else:
-                by_uid[c["uid"]] = c
+            if c["uid"] in by_uid:
+                other = by_uid[c["uid"]]
+                raise ValueError(f"Duplicate UniqueId in {other['rel']} and {c['rel']}; clear copied identity metadata before importing")
+            by_uid[c["uid"]] = c
 
         kept.append(c)
 
@@ -1156,9 +1136,19 @@ def import_rbxlx(
         clean = bool(c.get("clean"))
 
         item: ET.Element | None = None
-        if ref and ref in referent_map:
-            item = referent_map[ref]
-        elif path_key and path_key in path_map:
+        uid = c["uid"]
+        if uid and uid in ambiguous_uids:
+            raise ValueError(f"Ambiguous UniqueId for {c['rel']}: {uid}")
+        if uid and uid in uid_map:
+            item = uid_map[uid]
+        elif ref and ref in referent_map:
+            possible = referent_map[ref]
+            # Referents are serialization-local. Never let a reused Referent
+            # override a conflicting stable UniqueId from another place/save.
+            existing_uid = _get_unique_id(possible)
+            if not uid or not existing_uid or existing_uid == uid:
+                item = possible
+        if item is None and path_key and path_key in path_map:
             item = path_map[path_key]
 
         # Clean candidates: mark place match applied, never write.
@@ -1279,16 +1269,6 @@ def import_rbxlx(
         # other non-scripts (the 1:1 check already protects, but this makes
         # the safety explicit and matches pure-prune policy).
         if scripts_only_run and cls not in _SCRIPT_CLASSES:
-            for path, item in group:
-                if parent_path not in extract_parents:
-                    continue
-                leftovers_reported += 1
-                line = f"  · leftover / possible deletion: {path} ({cls or 'instance'})"
-                if leftovers_reported <= _LEFTOVER_PRINT_LIMIT:
-                    leftover_lines.append(line)
-                if not no_delete:
-                    if _remove_item_from_tree(item, parent_map, root, path_map, path):
-                        pruned += 1
             continue
 
         created_list: list[tuple[str, str | None]] = [
@@ -1303,7 +1283,7 @@ def import_rbxlx(
             old_source = _get_source(item)
             # Prefer Source equality when both sides have Source (scripts).
             # If both have Source and they differ, treat as leftover instead.
-            if old_source and created_source is not None and old_source != created_source:
+            if cls in _SCRIPT_CLASSES and old_source != created_source:
                 # Fall through to leftover handling below
                 pass
             else:
@@ -1338,7 +1318,7 @@ def import_rbxlx(
 
     if updated or created or renames_applied or pruned:
         ET.indent(tree, space="  ")
-        tree.write(str(out_path), encoding="utf-8", xml_declaration=True)
+        _write_place(tree, out_path)
 
     parts = []
     if updated:
@@ -1359,13 +1339,13 @@ def import_rbxlx(
     if skipped_clean:
         print(f"  ({skipped_clean} entry(ies) clean per manifest / mtime-win — marked matched, not written)")
     if skipped_redundant:
-        print(f"  ({skipped_redundant} redundant disk entry(ies) skipped — Name_N / shared Referent or UniqueId)")
+        print(f"  ({skipped_redundant} redundant disk entry(ies) skipped — shared Referent or UniqueId)")
     if skipped_no_match:
         print(f"  ({skipped_no_match} folder entries had no matching instance and could not ensure parent)")
     if renames_reported and no_rename:
         print(f"  ({renames_reported} high-confidence rename(s) reported — omit --no-rename to remove the old name)")
     if leftovers_reported and no_delete:
-        print(f"  ({leftovers_reported} leftover(s) reported — omit --no-delete to keep)")
+        print(f"  ({leftovers_reported} leftover(s) reported — omit --no-delete to prune)")
     elif leftovers_reported and pruned:
         print(f"  ({leftovers_reported} leftover(s) under extract tree — pruned by default; pass --no-delete to keep)")
     print("Open the place in Studio (or re-open) to see the changes.")
@@ -1414,7 +1394,7 @@ def main() -> None:
         action="store_true",
         help=(
             "Force consideration of all matching folder files, bypassing the "
-            "manifest clean-check and mtime-win logic that would otherwise skip "
+            "manifest clean-check that would otherwise skip unchanged "
             "writes. Content is still only written when it actually differs. "
             "Redundant disk entries are still skipped. Missing entries are always "
             "created even without this flag."
@@ -1433,18 +1413,12 @@ def main() -> None:
     parser.add_argument(
         "--no-rename",
         action="store_true",
-        help=(
-            "Report high-confidence renames but do not remove the old instance. "
-            "By default (without this flag) the old name is removed."
-        ),
+        help="Report suspected renames without removing the old instance.",
     )
     parser.add_argument(
         "--no-delete",
         action="store_true",
-        help=(
-            "Report unmatched leftovers under the extract tree but do not prune "
-            "them. By default (without this flag) leftovers are removed."
-        ),
+        help="Keep unmatched leftovers; report only. Suspected renames are controlled by --no-rename.",
     )
     parser.add_argument(
         "--scripts-only",

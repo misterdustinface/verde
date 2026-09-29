@@ -276,6 +276,10 @@ local function pushInstanceToBridge(inst: Instance)
 		content = (inst :: LuaSourceContainer).Source,
 	})
 	local okPush, errPush = Verde.bridgePost("/push", { files = files })
+	if okPush and (typeof(errPush) ~= "table" or typeof(errPush.written) ~= "table" or #errPush.written ~= #files) then
+		okPush = false
+		errPush = "Bridge did not write every pushed file. Check the verde-sync terminal."
+	end
 	if not okPush then
 		setLiveStatus(
 			diagnoseBridgeFailure(errPush)
@@ -294,6 +298,9 @@ local function applyDirtyPaths(paths: { string })
 	local recording = ChangeHistoryService:TryBeginRecording("Verde Live Sync")
 	local recordingOk = recording ~= nil
 	local applied, noMatch = 0, 0
+	local acknowledged: { string } = {}
+	local versions: { [string]: string } = {}
+	local failures = 0
 
 	applyingFromBridge = true
 	for _, rel in paths do
@@ -307,19 +314,21 @@ local function applyDirtyPaths(paths: { string })
 		local meta: any = nil
 
 		if isScript then
-			local okFile, body = Verde.bridgeGet("/file?path=" .. HttpService:UrlEncode(rel))
-			if okFile and typeof(body) == "string" then
-				source = body
+			local okFile, body = Verde.bridgeGet("/file?envelope=1&path=" .. HttpService:UrlEncode(rel))
+			if okFile and typeof(body) == "table" and typeof(body.content) == "string" and typeof(body.revision) == "string" then
+				source = body.content
+				versions[rel] = body.revision
 			end
 			local okMeta, m = Verde.bridgeGet("/meta?path=" .. HttpService:UrlEncode(rel))
 			if okMeta and typeof(m) == "table" then
 				meta = m
 			end
 		elseif isMeta then
-			local okMeta, m = Verde.bridgeGet("/file?path=" .. HttpService:UrlEncode(rel))
-			if okMeta and typeof(m) == "string" then
+			local okMeta, m = Verde.bridgeGet("/file?envelope=1&path=" .. HttpService:UrlEncode(rel))
+			if okMeta and typeof(m) == "table" and typeof(m.content) == "string" and typeof(m.revision) == "string" then
+				versions[rel] = m.revision
 				local decodeOk, decoded = pcall(function()
-					return HttpService:JSONDecode(m)
+					return HttpService:JSONDecode(m.content)
 				end)
 				if decodeOk and typeof(decoded) == "table" then
 					meta = decoded
@@ -327,11 +336,19 @@ local function applyDirtyPaths(paths: { string })
 			end
 		end
 
-		local changed, err = Verde.applyFromBridge(rel, source, meta)
-		if err == "no match" then
+		if (isScript and source == nil) or (isMeta and meta == nil) then
+			failures += 1
+			continue
+		end
+		local okApply, changed, err = pcall(Verde.applyFromBridge, rel, source, meta)
+		if not okApply then
+			failures += 1
+			warn("[Verde] Apply failed for " .. rel .. ": " .. tostring(changed))
+		elseif err then
 			noMatch += 1
-		elseif changed then
-			applied += 1
+		else
+			table.insert(acknowledged, rel)
+			if changed then applied += 1 end
 		end
 	end
 	applyingFromBridge = false
@@ -339,10 +356,16 @@ local function applyDirtyPaths(paths: { string })
 	if recording then
 		ChangeHistoryService:FinishRecording(recording, Enum.FinishRecordingOperation.Commit)
 	end
-	Verde.bridgePost("/applied", { paths = paths })
+	local ackOk, ackError = Verde.bridgePost("/applied", { paths = acknowledged, versions = versions })
+	if not ackOk then
+		failures += 1
+		warn("[Verde] Acknowledgement failed: " .. tostring(ackError))
+	end
 
 	local undoNote = if not recordingOk then "\n(No undo waypoint: playtest or concurrent recording.)" else ""
-	if noMatch > 0 then
+	if failures > 0 then
+		setLiveStatus(string.format("Synced %d change(s). %d failure(s); failed files remain pending.", applied, failures) .. undoNote, true)
+	elseif noMatch > 0 then
 		setLiveStatus(
 			string.format(
 				"Synced %d script change(s).\n%d file(s) had no matching script in Studio.\n"
@@ -524,9 +547,13 @@ local function startLive()
 		if data.last_id then
 			lastEventId = data.last_id
 		end
-		for _, ev in (data.events or {}) do
-			if ev.type == "dirty" and ev.paths then
-				applyDirtyPaths(ev.paths)
+		if typeof(data.pending) == "table" then
+			applyDirtyPaths(data.pending)
+		else
+			for _, ev in (data.events or {}) do
+				if ev.type == "dirty" and ev.paths then
+					applyDirtyPaths(ev.paths)
+				end
 			end
 		end
 	end)

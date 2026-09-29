@@ -239,8 +239,10 @@ function Verde.dumpScripts(options: DumpOptions?): (Folder, number)
 	local function archiveOne(scriptInstance: LuaSourceContainer)
 		if excluded(scriptInstance) then return end
 		local pathParts: { string } = {}
+		local originalParts: { string } = {}
 		local current: Instance? = scriptInstance
 		while current and current ~= game do
+			table.insert(originalParts, 1, current.Name)
 			table.insert(pathParts, 1, sanitizeName(current.Name))
 			current = current.Parent
 		end
@@ -259,12 +261,17 @@ function Verde.dumpScripts(options: DumpOptions?): (Folder, number)
 		archive:SetAttribute("OriginalClass", scriptInstance.ClassName)
 		archive:SetAttribute("OriginalName", scriptInstance.Name)
 		archive:SetAttribute("OriginalFullName", scriptInstance:GetFullName())
+		archive:SetAttribute("OriginalPath", HttpService:JSONEncode(originalParts))
+		local original = Instance.new("ObjectValue")
+		original.Name = "OriginalInstance"
+		original.Value = scriptInstance
+		original.Parent = archive
 		if scriptInstance:IsA("BaseScript") then
 			archive:SetAttribute("Enabled", (scriptInstance :: BaseScript).Enabled)
 		end
 		local okRC, runContext = pcall(function() return (scriptInstance :: any).RunContext end)
 		if okRC and runContext ~= nil then
-			archive:SetAttribute("RunContext", tostring(runContext))
+			archive:SetAttribute("RunContext", runContext.Name)
 		end
 		local tags = CollectionService:GetTags(scriptInstance)
 		if #tags > 0 then
@@ -311,16 +318,23 @@ function Verde.restoreScripts(options: RestoreOptions?): (number, number, number
 		warn("[Verde] No ScriptDump_* folder found")
 		return 0, 0, 0
 	end
-	local function getOrCreatePath(fullPath: string): Instance
-		local parts = string.split(fullPath, ".")
+	local function getOrCreatePath(fullPath: string, pathParts: { string }?): Instance?
+		local parts = pathParts or string.split(fullPath, ".")
 		local current: Instance = game
 		for _, name in parts do
-			if name == "" or name == "game" then continue end
-			local nextInst = current:FindFirstChild(name)
+			if not pathParts and (name == "" or name == "game") then continue end
+			local nextInst: Instance? = nil
+			for _, candidate in current:GetChildren() do
+				if candidate.Name == name then
+					if nextInst then return nil end
+					nextInst = candidate
+				end
+			end
 			if not nextInst then
+				if not recreateMissing then return nil end
 				if SERVICE_NAMES[name] and current == game then
 					local ok, svc = pcall(function() return game:GetService(name) end)
-					if ok and svc then nextInst = svc else return current end
+					if ok and svc then nextInst = svc else return nil end
 				else
 					nextInst = Instance.new("Folder")
 					nextInst.Name = name
@@ -350,9 +364,33 @@ function Verde.restoreScripts(options: RestoreOptions?): (number, number, number
 		end
 		local parentPath = string.match(originalFullName, "^(.+)%..+$") or ""
 		local leafName = originalName
-		local parent = if parentPath ~= "" then getOrCreatePath(parentPath) else game
-		local existing = parent:FindFirstChild(leafName)
+		local pathParts: { string }? = nil
+		local encodedPath = archive:GetAttribute("OriginalPath")
+		if typeof(encodedPath) == "string" then
+			local ok, decoded = pcall(function() return HttpService:JSONDecode(encodedPath) end)
+			if not ok or typeof(decoded) ~= "table" or #decoded == 0 then skipped += 1 return end
+			for _, part in decoded do
+				if typeof(part) ~= "string" then skipped += 1 return end
+			end
+			pathParts = decoded
+			table.remove(pathParts :: { string })
+		end
+		local original = archive:FindFirstChild("OriginalInstance")
+		local linked = if original and original:IsA("ObjectValue") then original.Value else nil
+		local parent = if linked and linked.Parent then linked.Parent
+			elseif pathParts or parentPath ~= "" then getOrCreatePath(parentPath, pathParts) else game
+		if not parent then skipped += 1 return end
+		local existing: Instance? = if linked and linked.Parent then linked else nil
+		if not existing then
+			for _, candidate in parent:GetChildren() do
+				if candidate.Name == leafName then
+					if existing then skipped += 1 return end
+					existing = candidate
+				end
+			end
+		end
 		local target: LuaSourceContainer?
+		if existing and existing.ClassName ~= originalClass then skipped += 1 return end
 		if existing and existing:IsA("LuaSourceContainer") then
 			target = existing
 		elseif recreateMissing then
@@ -372,7 +410,11 @@ function Verde.restoreScripts(options: RestoreOptions?): (number, number, number
 			(target :: BaseScript).Enabled = enabled :: boolean
 		end
 		if runContext ~= nil then
-			pcall(function() (target :: any).RunContext = Enum.RunContext[runContext :: string] end)
+			pcall(function()
+				local contextName = tostring(runContext):match("([^%.]+)$") or tostring(runContext)
+				local scriptTarget = target :: any
+				scriptTarget.RunContext = Enum.RunContext[contextName]
+			end)
 		end
 		-- Always replace the tag set so restore matches the archived state
 		-- (including the case where dump omitted the Tags attribute because
@@ -458,22 +500,30 @@ function Verde.resolveByRelPath(rel: string): Instance?
 	local parts = string.split(rel, "/")
 	if #parts == 0 then return nil end
 	local last = parts[#parts]
+	local isMeta = last:match("%.robloxmeta%.json$") ~= nil
 	last = last:gsub("%.robloxmeta%.json$", "")
+	if isMeta then
+		last = last:gsub("%.module$", ""):gsub("%.local$", "")
+	end
 	last = last:gsub("%.module%.lua$", ""):gsub("%.local%.lua$", ""):gsub("%.lua$", "")
 	parts[#parts] = last
 
 	local current: Instance? = game
 	for _, name in parts do
 		if not current then return nil end
-		local child = current:FindFirstChild(name)
+		local child: Instance? = nil
+		for _, candidate in current:GetChildren() do
+			if candidate.Name == name then
+				-- Ambiguous names cannot safely identify a mutation target.
+				if child then return nil end
+				child = candidate
+			end
+		end
 		if not child and current == game then
 			local ok, svc = pcall(function() return game:GetService(name) end)
 			if ok then child = svc end
 		end
-		if not child then
-			local base = name:match("^(.-)_%d+$") or name
-			child = current:FindFirstChild(base)
-		end
+
 		current = child
 	end
 	return current
@@ -666,7 +716,18 @@ local function decodeValue(encoded: any): any
 	local children = encoded.children
 	local src: any = if typeof(children) == "table" then children else encoded
 
-	if ty == "Color3" or ty == "Color3uint8" then
+	if ty == "bool" then
+		if typeof(encoded.value) == "boolean" then return encoded.value end
+		if encoded.value == "true" then return true end
+		if encoded.value == "false" then return false end
+		return nil
+	elseif ty == "int" or ty == "int64" or ty == "float" or ty == "double" or ty == "token" then
+		return tonumber(encoded.value)
+	elseif ty == "string" or ty == "ProtectedString" then
+		return encoded.value
+	elseif ty == "Content" then
+		return if typeof(children) == "table" then children.url or "" else encoded.value
+	elseif ty == "Color3" or ty == "Color3uint8" then
 		local r = tonumber(src.R or src.r) or 0
 		local g = tonumber(src.G or src.g) or 0
 		local b = tonumber(src.B or src.b) or 0
@@ -791,14 +852,14 @@ function Verde.serializeMeta(inst: Instance): { [string]: any }
 	if uid then meta.Referent = uid end
 
 	local tags = CollectionService:GetTags(inst)
-	if #tags > 0 then meta.Tags = tags end
+	meta.Tags = tags
 
 	local attrs: { [string]: any } = {}
 	for name, value in inst:GetAttributes() do
 		local encoded = encodeValue(value)
 		if encoded ~= nil then attrs[name] = encoded end
 	end
-	if next(attrs) then meta.Attributes = attrs end
+	meta.Attributes = attrs
 
 	local props: { [string]: any } = {}
 	for _, prop in LIVE_PROPS do
@@ -877,14 +938,14 @@ function Verde.applyMeta(target: Instance, meta: { [string]: any }): boolean
 		end
 		for name, _ in target:GetAttributes() do
 			if want[name] == nil then
-				pcall(function() target:SetAttribute(name, nil) end)
+				target:SetAttribute(name, nil)
 				changed = true
 			end
 		end
 		for name, decoded in want do
 			local ok, cur = pcall(function() return target:GetAttribute(name) end)
 			if ok and not valuesEqual(cur, decoded) then
-				pcall(function() target:SetAttribute(name, decoded) end)
+				target:SetAttribute(name, decoded)
 				changed = true
 			end
 		end
@@ -896,7 +957,7 @@ function Verde.applyMeta(target: Instance, meta: { [string]: any }): boolean
 		end
 		local value = raw
 		if typeof(raw) == "table" then
-			if raw.value ~= nil then
+			if typeof(raw.value) == "table" then
 				value = decodeValue(raw.value)
 			else
 				value = decodeValue(raw)
@@ -905,7 +966,7 @@ function Verde.applyMeta(target: Instance, meta: { [string]: any }): boolean
 		if value == nil then return end
 		local ok, cur = pcall(function() return (target :: any)[prop] end)
 		if ok and not valuesEqual(cur, value) then
-			pcall(function() (target :: any)[prop] = value end)
+			(target :: any)[prop] = value
 			changed = true
 		end
 	end

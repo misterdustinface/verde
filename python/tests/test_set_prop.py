@@ -42,7 +42,7 @@ def _write_tree(tmp_path: Path) -> Path:
     src = tmp_path / "in.rbxlx"
     src.write_text(xml, encoding="utf-8")
     out = tmp_path / "extracted"
-    extract.extract(str(src), str(out))
+    extract.extract(str(src), str(out), scripts_only=False)
     return out
 
 

@@ -54,6 +54,7 @@ py-modules = [
     "interesting",
     "test_roundtrip",
     "attributes",
+    "xml_props",
 ]
 
 [tool.pytest.ini_options]

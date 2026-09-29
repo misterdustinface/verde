@@ -22,28 +22,44 @@ When Open issues is empty, contains only “None currently.”, or is sparse (ro
 
 ## Open issues
 
-### 1. Child order not preserved on Python full rebuild / import
+### 1. Live Sync simultaneous edits
 
-`build.py` `process_directory` walks the filesystem with `sorted(iterdir())`. Roblox instance child order is therefore not restored on full rebuild. Differential import also leaves existing place children in their original order and does not re-order them to match the folder. Usually harmless for scripts, but prevents byte-identical round-trips and can affect order-sensitive behaviour (UI lists, some collection patterns).
+Live Sync now records only acknowledged files and the new plugin supplies a
+SHA-256 revision token so an edit arriving after a read remains dirty. Concurrent
+Studio pushes and disk edits still lack a three-way conflict policy. Old plugins
+retain the legacy unversioned acknowledgement; update bridge and plugin together.
 
-**Impact**  
-Non-identical rebuilds; rare behavioural differences for order-dependent instances.
+**Impact**: simultaneously edited content can still be overwritten by the other side.
 
-### 2. Attributes decode stops at first unknown type_id
+### 2. Legacy Studio script archive restore can select the wrong target
 
-`attributes.decode_attributes` aborts the remaining attribute list as soon as it encounters an unrecognised type ID (it cannot safely skip a variable-length value). Later attributes in the same `AttributesSerialize` payload are therefore lost on extract. Encode also skips any `__type` that begins with `Unknown_`.
+`restoreScripts` now uses instance references and JSON path segments for new
+archives and refuses duplicate fallback paths. Legacy archives without those
+fields still split `OriginalFullName` on dots, so names containing dots cannot
+be represented reliably. The updated archive path has a Studio smoke suite,
+but that suite has not been run here.
 
-**Impact**  
-Partial Attributes loss on places that use newer or rare attribute types; round-trip fidelity degrades for those instances.
+**Impact**: restoring an archive may overwrite a different script or recreate
+parents at the wrong hierarchy path.
 
-### 3. Root-level non-Item elements dropped on full rebuild
+### 3. Unsupported attributes cannot be edited as decoded JSON
 
-Full extract + build (and differential create paths) do not preserve top-level children of the `<roblox>` root other than `Item`s (`SharedStrings` table, `Meta`, `External*`, etc.). Tags that were SharedString references are re-emitted as BinaryString (so the common Tags case survives), but any other property that remains a SharedString md5 key, or any place that relies on the root SharedStrings table / Meta / External references, will lose those elements after a rebuild.
+New exports retain the original `AttributesSerialize` blob when decoding is
+incomplete, preventing rebuild data loss. The decoder still stops at an unknown
+type. Such payloads remain opaque until support for that type is implemented;
+replacing them with decoded Attributes intentionally replaces the blob.
 
-**Impact**  
-Data loss / dangling references for places that use SharedString for non-Tags properties or that depend on root Meta/External. Full preservation is also tracked as APPROVED work in TODO_FEATURES; the current behaviour is still a correctness gap for those places.
+### 4. Cross-place reference remapping
 
-### 4. Live Sync “no matching script” noise after renames / stale Referent
+Stable UniqueId matching now takes precedence over reused Referent and updates
+preserve target Referents. Ref-valued properties imported from a different
+serialization still need explicit old-to-new reference remapping. Duplicate
+exported identity metadata now aborts import before modifying the target.
+
+**Impact**: cross-place references can point at unrelated or missing instances;
+copying an instance meta file is not a safe clone operation.
+
+### 5. Live Sync “no matching script” noise after renames / stale Referent
 
 When a script is renamed in Studio or the on-disk meta still carries a stale Referent/UniqueId, the bridge path-matching falls back to name/path and reports “N file(s) had no matching script”. The count is surfaced (not silent), but large places accumulate noise and require a re-export or manual healing. Full Referent/UniqueId healing is tracked as I1 in TODO_FEATURES; until then this remains a residual robustness gap in the live path.
 
@@ -68,8 +84,9 @@ These behaviours are deliberate and should not be “fixed” without an explici
 - **Scripts-only default on export**  
   Only directories that lead to scripts are written; empty directories are pruned. Use `--all` for the full hierarchy. Documented and intentional.
 
-- **mtime-win on import/merge**  
-  Most-recent-wins is the documented offline conflict policy; not a defect.
+- **mtime-win on explicit offline merge**
+  Most-recent-wins remains the documented `verde-merge` policy. Import and Live
+  Sync use changed content hashes without suppressing edits based on timestamps.
 
 - **Live Sync non-goals**  
   No auto-create/delete of instances from disk while Studio is open; scripts-only default watch; no user-facing port configuration.
@@ -78,7 +95,18 @@ These behaviours are deliberate and should not be “fixed” without an explici
 
 ## Remaining minor / edge-case notes
 
-- Full-rebuild child order (Open #1) is the only remaining order-related item; differential import intentionally does not reorder existing place children.
+**2026-09-29 correction:** Earlier residual-scan statements below are historical,
+not evidence that the current code was defect-free. The safety audit found
+additional destructive and silent-failure paths; see
+[IMPORT_EXPORT_AUDIT.md](IMPORT_EXPORT_AUDIT.md). New exports now preserve root
+SharedStrings/Meta/External elements and incomplete attribute blobs. Existing
+exports that already lost that data cannot recover it without re-exporting the
+original place. New full exports record child order for rebuild; differential import preserves existing order. Import retains its original pruning and rename-removal defaults.
+`--no-delete --no-rename` requests report-only handling; scripts-only pruning
+never removes non-script instances.
+
+
+- Historical full-rebuild child-order issue is corrected for new exports by `_VerdeOrder`; differential import intentionally does not reorder existing place children.
 - Bridge and import `write_manifest` failures are now both surfaced (Previously corrected #21 and #28).
 - Shared uniqueness helper is now fully wired in both extract and build (Previously corrected #22).
 - Attributes unknown-type early-stop (Open #2) remains the main residual Attributes edge case; encode now filters unknown structured types cleanly and accepts Luau CFrame/EnumItem shapes (Previously corrected #27).
